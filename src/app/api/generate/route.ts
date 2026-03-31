@@ -8,6 +8,7 @@ import {
   MAX_THREAD_POSTS,
   MAX_BRIEF_LENGTH,
   MAX_POST_LENGTH,
+  VARIANT_COUNT,
   isFormatOption,
   getTonePrompt,
   isToneOption,
@@ -16,9 +17,11 @@ import {
 export const runtime = "nodejs";
 
 function normalizePost(post: string) {
-  return post.length <= MAX_POST_LENGTH
-    ? post
-    : `${post.slice(0, MAX_POST_LENGTH - 3).trimEnd()}...`;
+  const flattened = post.trim().replace(/\s+/g, " ");
+
+  return flattened.length <= MAX_POST_LENGTH
+    ? flattened
+    : `${flattened.slice(0, MAX_POST_LENGTH - 3).trimEnd()}...`;
 }
 
 function extractThread(text: string) {
@@ -28,6 +31,14 @@ function extractThread(text: string) {
     .filter(Boolean)
     .slice(0, MAX_THREAD_POSTS)
     .map(normalizePost);
+}
+
+function extractVariants(text: string) {
+  return text
+    .split(/\n\s*===\s*\n/g)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .slice(0, VARIANT_COUNT);
 }
 
 export async function POST(request: Request) {
@@ -93,7 +104,7 @@ export async function POST(request: Request) {
 
     const response = await openai.responses.create({
       model,
-      max_output_tokens: 400,
+      max_output_tokens: 1200,
       ...(model.startsWith("gpt-5")
         ? { reasoning: { effort: "minimal" as const } }
         : {}),
@@ -105,24 +116,34 @@ export async function POST(request: Request) {
               type: "input_text",
               text:
                 format === "thread"
-                  ? `You write concise X threads. Return exactly ${DEFAULT_THREAD_POSTS} posts separated only by a line containing three dashes: ---
+                  ? `You write concise X threads. Return exactly ${VARIANT_COUNT} distinct thread variants.
+
+Use a line containing exactly === between variants.
+Inside each variant, use a line containing exactly --- between posts.
 
 Rules:
-- Return exactly ${DEFAULT_THREAD_POSTS} posts.
+- Return exactly ${VARIANT_COUNT} thread variants.
+- Return exactly ${DEFAULT_THREAD_POSTS} posts inside each variant.
 - Keep each post under ${MAX_POST_LENGTH} characters.
 - Each post should move the idea forward, not repeat the same line.
 - Do not add intro text, outro text, labels, or markdown bullets.
 - Do not number the posts.
+- Make the variants meaningfully different in angle or phrasing.
+- Use the separator line === between variants and nowhere else.
 - Use the separator line --- between posts and nowhere else.
 - Use at most one hashtag across the full thread, and only if it helps.
 - Keep the message specific and high-signal, not generic motivation.`
-                  : `You write concise posts for X. Return exactly one post and nothing else.
+                  : `You write concise posts for X. Return exactly ${VARIANT_COUNT} distinct post variants.
+
+Use a line containing exactly === between variants.
 
 Rules:
 - Stay under ${MAX_POST_LENGTH} characters.
 - Use one or two short sentences.
 - No quotation marks around the post.
 - No markdown, bullets, labels, or commentary.
+- Make the variants meaningfully different in angle or phrasing.
+- Use the separator line === between variants and nowhere else.
 - No more than one hashtag, and only if it materially helps.
 - Keep the message specific and high-signal, not generic motivation.`,
             },
@@ -158,31 +179,51 @@ ${getTonePrompt(tone)}`,
       );
     }
 
-    if (format === "thread") {
-      const posts = extractThread(output);
+    const variants = extractVariants(output);
 
-      if (posts.length < 2) {
+    if (variants.length < VARIANT_COUNT) {
+      return NextResponse.json(
+        { error: `The model did not return ${VARIANT_COUNT} usable variants.` },
+        { status: 502 },
+      );
+    }
+
+    if (format === "thread") {
+      const threadVariants = variants
+        .map((variant) => extractThread(variant))
+        .filter((posts) => posts.length >= 2)
+        .slice(0, VARIANT_COUNT);
+
+      if (threadVariants.length < VARIANT_COUNT) {
         return NextResponse.json(
-          { error: "The model did not return a usable thread." },
+          {
+            error: `The model did not return ${VARIANT_COUNT} usable thread variants.`,
+          },
           { status: 502 },
         );
       }
 
       return NextResponse.json({
         format: "thread",
-        posts: posts.map((text) => ({
-          text,
-          characters: text.length,
+        variants: threadVariants.map((posts) => ({
+          posts: posts.map((text) => ({
+            text,
+            characters: text.length,
+          })),
         })),
       });
     }
 
-    const normalizedPost = normalizePost(output.replace(/\s+/g, " "));
-
     return NextResponse.json({
       format: "post",
-      post: normalizedPost,
-      characters: normalizedPost.length,
+      variants: variants.map((variant) => {
+        const post = normalizePost(variant);
+
+        return {
+          post,
+          characters: post.length,
+        };
+      }),
     });
   } catch (error) {
     console.error("OpenAI generation failed", error);

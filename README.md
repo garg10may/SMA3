@@ -1,6 +1,6 @@
 ## SMA3
 
-Small personal Next.js app that turns a topic or short brief into an X-compatible post or short thread using OpenAI.
+Small personal Next.js app that turns a topic or short brief into three X-compatible post or thread variants using OpenAI.
 
 ## Setup
 
@@ -34,5 +34,6 @@ Then open [http://localhost:3000](http://localhost:3000).
 ## Notes
 
 - The UI sends the brief to `POST /api/generate`.
-- The route uses the OpenAI Responses API and trims each post to stay within 280 characters.
+- The route uses the OpenAI Responses API and returns three variants in one request.
+- Each post is trimmed to stay within 280 characters.
 - This is intentionally minimal: no auth, no history, no saved drafts.

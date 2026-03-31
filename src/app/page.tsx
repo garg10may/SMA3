@@ -2,9 +2,9 @@ import { PostGenerator } from "@/components/post-generator";
 
 export default function Home() {
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-5 py-8 sm:px-8 lg:px-10">
-      <section className="grid flex-1 gap-6 lg:grid-cols-[1.05fr_0.95fr]">
-        <div className="flex flex-col justify-between rounded-[2rem] border border-panel-border bg-panel p-7 shadow-[0_24px_80px_rgba(32,24,16,0.08)] backdrop-blur md:p-10">
+    <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-5 py-8 sm:px-8 lg:px-10">
+      <section className="rounded-[2rem] border border-panel-border bg-panel p-7 shadow-[0_24px_80px_rgba(32,24,16,0.08)] backdrop-blur md:p-10">
+        <div className="grid gap-8 lg:grid-cols-[1.1fr_0.9fr] lg:items-start">
           <div className="space-y-8">
             <div className="inline-flex w-fit items-center rounded-full border border-panel-border bg-white/70 px-3 py-1 font-mono text-xs uppercase tracking-[0.28em] text-muted">
               SMA3 personal tool
@@ -18,13 +18,12 @@ export default function Home() {
               </h1>
               <p className="max-w-xl text-base leading-8 text-muted sm:text-lg">
                 Drop in a topic, launch note, or half-formed idea. The app uses
-                OpenAI to turn it into a publishable post or a compact thread
-                that stays tight and platform-friendly.
+                OpenAI to turn it into three publishable post or thread variants
+                so you can compare tone, angle, and phrasing before posting.
               </p>
             </div>
           </div>
-
-          <div className="mt-10 grid gap-3 text-sm text-muted sm:grid-cols-3">
+          <div className="grid gap-3 text-sm text-muted sm:grid-cols-3 lg:grid-cols-1">
             <div className="rounded-3xl border border-panel-border bg-white/60 p-4">
               <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">
                 Focused
@@ -39,7 +38,8 @@ export default function Home() {
                 Adjustable
               </p>
               <p className="mt-2 leading-7">
-                Pick a tone before generating instead of rewriting later.
+                Pick a tone, compare three variants, and copy the one that
+                feels right.
               </p>
             </div>
             <div className="rounded-3xl border border-panel-border bg-white/60 p-4">
@@ -52,7 +52,9 @@ export default function Home() {
             </div>
           </div>
         </div>
+      </section>
 
+      <section className="mt-6 flex-1">
         <PostGenerator />
       </section>
     </main>

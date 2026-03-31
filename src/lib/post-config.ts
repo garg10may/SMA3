@@ -3,6 +3,7 @@ export const MAX_POST_LENGTH = 280;
 export const DEFAULT_MODEL = "gpt-5-mini";
 export const MAX_THREAD_POSTS = 5;
 export const DEFAULT_THREAD_POSTS = 4;
+export const VARIANT_COUNT = 3;
 
 export const toneOptions = [
   {
@@ -38,7 +39,7 @@ export const formatOptions = [
   {
     value: "thread",
     label: "Short thread",
-    helper: `A compact ${DEFAULT_THREAD_POSTS}-part thread for bigger ideas.`,
+    helper: `Three compact ${DEFAULT_THREAD_POSTS}-part thread variants for bigger ideas.`,
   },
 ] as const;
 
