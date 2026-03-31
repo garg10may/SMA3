@@ -2,6 +2,7 @@ export const MAX_BRIEF_LENGTH = 600;
 export const MAX_POST_LENGTH = 280;
 export const MAX_MEDIUM_WORDS = 1400;
 export const DEFAULT_MODEL = "gpt-5-mini";
+export const DEFAULT_IMAGE_MODEL = "gpt-image-1.5";
 export const MAX_THREAD_POSTS = 5;
 export const DEFAULT_THREAD_POSTS = 4;
 export const VARIANT_COUNT = 3;

@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { NextResponse } from "next/server";
 import {
   DEFAULT_FORMAT,
+  DEFAULT_IMAGE_MODEL,
   DEFAULT_MODEL,
   DEFAULT_PLATFORM,
   DEFAULT_TONE,
@@ -48,17 +49,176 @@ function normalizeMediumStory(story: string) {
   return story.replace(/\r\n/g, "\n").trim();
 }
 
+type MediumMathEmbed = {
+  token: string;
+  latex: string;
+  url: string;
+  embedUrl: string;
+  width: number;
+  height: number;
+};
+
+function extractMathBlocks(markdown: string) {
+  const mathBlocks: { token: string; latex: string }[] = [];
+  let index = 0;
+
+  let nextMarkdown = markdown.replace(
+    /```math\s*\n([\s\S]*?)\n```/g,
+    (_, latex: string) => {
+      const token = `@@MATH_EMBED_${index}@@`;
+      index += 1;
+      mathBlocks.push({ token, latex: latex.trim() });
+      return token;
+    },
+  );
+
+  nextMarkdown = nextMarkdown.replace(/\$\$([\s\S]*?)\$\$/g, (_, latex: string) => {
+    const token = `@@MATH_EMBED_${index}@@`;
+    index += 1;
+    mathBlocks.push({ token, latex: latex.trim() });
+    return token;
+  });
+
+  return {
+    markdown: nextMarkdown,
+    mathBlocks,
+  };
+}
+
+function estimateMathEmbedSize(latex: string) {
+  const lines = latex.split("\n");
+  const longestLine = Math.max(...lines.map((line) => line.length), 12);
+
+  return {
+    width: Math.min(900, Math.max(320, longestLine * 11)),
+    height: Math.min(360, Math.max(140, lines.length * 42 + 80)),
+  };
+}
+
+async function createMathEmbed(latex: string): Promise<Omit<MediumMathEmbed, "token" | "latex">> {
+  const createResponse = await fetch("https://math.embed.fun/api/v1/formulas", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: "{}",
+  });
+
+  if (!createResponse.ok) {
+    throw new Error(`Create math formula failed with ${createResponse.status}`);
+  }
+
+  const formula = (await createResponse.json()) as {
+    object_id: number;
+    object_uuid: string;
+    object_type: string;
+    published: boolean;
+    data: { latex: string };
+    width: number;
+    height: number;
+  };
+
+  const { width, height } = estimateMathEmbedSize(latex);
+
+  const updatedFormula = {
+    ...formula,
+    data: {
+      ...formula.data,
+      latex,
+    },
+    width,
+    height,
+  };
+
+  const updateResponse = await fetch(
+    `https://math.embed.fun/api/v1/formulas/${formula.object_uuid}`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(updatedFormula),
+    },
+  );
+
+  if (!updateResponse.ok) {
+    throw new Error(`Update math formula failed with ${updateResponse.status}`);
+  }
+
+  const publishResponse = await fetch(
+    `https://math.embed.fun/api/v1/formulas/${formula.object_uuid}/publish`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(updatedFormula),
+    },
+  );
+
+  if (!publishResponse.ok) {
+    throw new Error(`Publish math formula failed with ${publishResponse.status}`);
+  }
+
+  return {
+    url: `https://math.embed.fun/${formula.object_uuid}`,
+    embedUrl: `https://math.embed.fun/embed/${formula.object_uuid}`,
+    width,
+    height,
+  };
+}
+
+function extractMediumTitle(markdown: string) {
+  const match = markdown.match(/^#\s+(.+)$/m);
+  return match?.[1]?.trim() || "Feature article";
+}
+
+function extractMediumExcerpt(markdown: string) {
+  const lines = markdown
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !line.startsWith("#") && !line.startsWith("```"));
+
+  return lines.slice(0, 2).join(" ").slice(0, 320);
+}
+
+function buildLeadImagePrompt(input: {
+  brief: string;
+  audience: string;
+  mediumGoal: string;
+  title: string;
+  excerpt: string;
+}) {
+  return `Create a striking editorial lead image for a Medium article.
+
+Article title: ${input.title}
+Article angle: ${input.brief}
+Target reader: ${input.audience || "General professional audience"}
+Article goal: ${input.mediumGoal || "Teach a practical lesson"}
+Supporting context: ${input.excerpt}
+
+Requirements:
+- Landscape hero image, suitable as the opening image for a Medium post
+- Strong focal point, clean composition, emotionally engaging but not cheesy
+- Editorial illustration or cinematic conceptual scene, not UI screenshots
+- No text, captions, logos, watermarks, borders, or split panels
+- Visually specific to the article idea, not generic stock-photo aesthetics
+- High detail, modern, polished, professional`;
+}
+
 function getSystemPrompt(platform: "x" | "medium", format: "post" | "thread") {
   if (platform === "medium") {
     return `You write Medium-ready articles that paste cleanly into the Medium editor. Return one complete article in Markdown.
 
 Rules:
 - Begin with a single H1 title line using Markdown syntax: # Title
-- Use only these Markdown features: headings (#, ##, ###), paragraphs, bullet lists, numbered lists, blockquotes, bold, italics, inline code, fenced code blocks with a language when code is included, and markdown links.
+- Use only these Markdown features: headings (#, ##, ###), paragraphs, bullet lists, numbered lists, blockquotes, bold, italics, inline code, fenced code blocks with a language when code is included, fenced math blocks using three backticks followed by math, and markdown links.
 - Do not use tables, HTML tags, horizontal rules, footnotes, or the separator line ===.
 - Keep the article between 600 and ${MAX_MEDIUM_WORDS} words.
 - Structure it so it is easy to read on Medium: strong opening, clear section headings, concrete examples, and a short closing section.
 - If the brief suggests code, include at least one fenced code block with a language label. If not, do not force code.
+- If the brief needs mathematical notation, put display equations in fenced math blocks using three backticks followed by math, and avoid inline LaTeX delimiters in prose.
 - Return only the article. No commentary before or after it.`;
   }
 
@@ -275,11 +435,60 @@ export async function POST(request: Request) {
 
     if (platform === "medium") {
       const markdown = normalizeMediumStory(output);
+      const extractedMath = extractMathBlocks(markdown);
+      const title = extractMediumTitle(markdown);
+      const excerpt = extractMediumExcerpt(markdown);
+      let leadImageDataUrl: string | null = null;
+      let mathEmbeds: MediumMathEmbed[] = [];
+
+      if (extractedMath.mathBlocks.length > 0) {
+        mathEmbeds = await Promise.all(
+          extractedMath.mathBlocks.map(async (mathBlock) => {
+            const embed = await createMathEmbed(mathBlock.latex);
+
+            return {
+              token: mathBlock.token,
+              latex: mathBlock.latex,
+              ...embed,
+            };
+          }),
+        );
+      }
+
+      try {
+        const imageResponse = await openai.images.generate({
+          model: DEFAULT_IMAGE_MODEL,
+          prompt: buildLeadImagePrompt({
+            brief: rawBrief,
+            audience: rawAudience,
+            mediumGoal: rawMediumGoal,
+            title,
+            excerpt,
+          }),
+          size: "1536x1024",
+          quality: "high",
+          output_format: "png",
+          background: "opaque",
+          n: 1,
+          stream: false,
+        });
+
+        const imageBase64 = imageResponse.data?.[0]?.b64_json;
+
+        if (imageBase64) {
+          leadImageDataUrl = `data:image/png;base64,${imageBase64}`;
+        }
+      } catch (imageError) {
+        console.error("OpenAI image generation failed", imageError);
+      }
 
       return NextResponse.json({
         format: "medium",
-        markdown,
-        words: markdown.split(/\s+/).filter(Boolean).length,
+        markdown: extractedMath.markdown,
+        words: extractedMath.markdown.split(/\s+/).filter(Boolean).length,
+        leadImageAlt: `Lead image for ${title}`,
+        leadImageDataUrl,
+        mathEmbeds,
       });
     }
 
