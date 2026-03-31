@@ -40,6 +40,70 @@ type ThreadResult = {
 
 type GenerateResponse = PostResult | ThreadResult;
 
+type CopyActionButtonProps = {
+  copied: boolean;
+  label: string;
+  onClick: () => void;
+};
+
+function CopyIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 16 16"
+      className="h-3.5 w-3.5"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="5" y="3" width="8" height="10" rx="1.8" />
+      <path d="M3.5 10.5H3A1.5 1.5 0 0 1 1.5 9V3A1.5 1.5 0 0 1 3 1.5h6A1.5 1.5 0 0 1 10.5 3v0.5" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 16 16"
+      className="h-3.5 w-3.5"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />
+    </svg>
+  );
+}
+
+function CopyActionButton({
+  copied,
+  label,
+  onClick,
+}: CopyActionButtonProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={copied ? `${label} copied` : label}
+      title={copied ? `${label} copied` : label}
+      className={`inline-flex h-8 w-8 items-center justify-center rounded-full border transition ${
+        copied
+          ? "border-[#ffb499] bg-[#ffb499]/12 text-[#ffcfbc]"
+          : "border-white/12 bg-white/[0.04] text-white/72 hover:border-[#ffb499] hover:text-white"
+      }`}
+    >
+      {copied ? <CheckIcon /> : <CopyIcon />}
+      <span className="sr-only">{copied ? `${label} copied` : label}</span>
+    </button>
+  );
+}
+
 export function PostGenerator() {
   const [brief, setBrief] = useState("");
   const [tone, setTone] = useState<ToneOption>(DEFAULT_TONE);
@@ -112,9 +176,9 @@ export function PostGenerator() {
   }
 
   return (
-    <div className="space-y-6">
-      <section className="rounded-[2rem] border border-panel-border bg-[#171717] p-4 text-white shadow-[0_24px_80px_rgba(23,23,23,0.18)] sm:p-5">
-        <div className="rounded-[1.65rem] border border-white/10 bg-white/[0.04] p-5 sm:p-6">
+    <div className="space-y-4">
+      <section className="rounded-[1.6rem] border border-panel-border bg-[#171717] p-3 text-white shadow-[0_24px_80px_rgba(23,23,23,0.18)] sm:p-4">
+        <div className="rounded-[1.35rem] border border-white/10 bg-white/[0.04] p-4 sm:p-5">
           <div className="space-y-2">
             <p className="font-mono text-xs uppercase tracking-[0.24em] text-[#ffb499]">
               Generate
@@ -127,7 +191,7 @@ export function PostGenerator() {
             </p>
           </div>
 
-          <form action={handleSubmit} className="mt-6 space-y-5">
+          <form action={handleSubmit} className="mt-5 space-y-4">
             <div className="space-y-2">
               <label
                 htmlFor="brief"
@@ -143,7 +207,7 @@ export function PostGenerator() {
                 value={brief}
                 onChange={(event) => setBrief(event.target.value)}
                 placeholder="Example: I shipped a small internal automation that saves me 45 minutes every morning. I want a post about why small boring tools compound."
-                className="w-full resize-none rounded-[1.4rem] border border-white/12 bg-white/[0.06] px-4 py-4 text-base leading-7 text-white outline-none transition focus:border-[#ffb499] focus:bg-white/[0.08]"
+                className="w-full resize-none rounded-[1.15rem] border border-white/12 bg-white/[0.06] px-3.5 py-3.5 text-base leading-7 text-white outline-none transition focus:border-[#ffb499] focus:bg-white/[0.08]"
                 required
               />
               <div className="flex items-center justify-between text-xs text-white/45">
@@ -165,7 +229,7 @@ export function PostGenerator() {
                     return (
                       <div
                         key={option.value}
-                        className={`rounded-[1.15rem] border px-4 py-3 transition ${
+                        className={`rounded-[1rem] border px-3.5 py-2.5 transition ${
                           active
                             ? "border-[#ffb499] bg-[#ffb499]/12"
                             : "border-white/12 bg-white/[0.04]"
@@ -209,7 +273,7 @@ export function PostGenerator() {
                 name="tone"
                 value={tone}
                 onChange={(event) => setTone(event.target.value as ToneOption)}
-                className="w-full rounded-[1rem] border border-white/12 bg-white/[0.06] px-4 py-3 text-sm text-white outline-none transition focus:border-[#ffb499]"
+                className="w-full rounded-[0.95rem] border border-white/12 bg-white/[0.06] px-3.5 py-2.5 text-sm text-white outline-none transition focus:border-[#ffb499]"
               >
                 {toneOptions.map((option) => (
                   <option
@@ -226,7 +290,7 @@ export function PostGenerator() {
             <button
               type="submit"
               disabled={isPending || brief.trim().length < 12}
-              className="inline-flex w-full items-center justify-center rounded-full bg-[#f6b26b] px-5 py-3 text-sm font-medium text-[#171717] transition hover:bg-[#ffc58f] disabled:cursor-not-allowed disabled:bg-[#c79d6b]"
+              className="inline-flex w-full items-center justify-center rounded-full bg-[#f6b26b] px-5 py-2.5 text-sm font-medium text-[#171717] transition hover:bg-[#ffc58f] disabled:cursor-not-allowed disabled:bg-[#c79d6b]"
             >
               {isPending
                 ? "Writing..."
@@ -238,138 +302,111 @@ export function PostGenerator() {
         </div>
       </section>
 
-      <section className="rounded-[2rem] border border-panel-border bg-panel p-4 shadow-[0_24px_80px_rgba(32,24,16,0.08)] backdrop-blur sm:p-5">
-        <div className="rounded-[1.65rem] border border-panel-border bg-white/45 p-5 sm:p-6">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="font-mono text-xs uppercase tracking-[0.2em] text-accent">
-                Output
-              </p>
-              <p className="mt-1 text-sm text-muted">
-                {result?.format === "thread"
-                  ? `${VARIANT_COUNT} thread variants, with each post trimmed to ${MAX_POST_LENGTH} characters.`
-                  : `${VARIANT_COUNT} post variants, each trimmed to ${MAX_POST_LENGTH} characters.`}
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-4 min-h-44 rounded-[1.2rem] border border-dashed border-panel-border bg-white/55 p-4">
-            {result ? (
-              result.format === "thread" ? (
-                <div className="grid gap-4 xl:grid-cols-3">
-                  {result.variants.map((variant, variantIndex) => (
-                    <div
-                      key={`thread-variant-${variantIndex}`}
-                      className="flex h-full flex-col rounded-[1rem] border border-panel-border bg-[#171717] p-4 text-white"
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="font-mono text-xs uppercase tracking-[0.18em] text-[#ffb499]">
-                          Variant {variantIndex + 1}
-                        </p>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleCopy(
-                              variant.posts
-                                .map(
-                                  (post, index) =>
-                                    `${index + 1}/${variant.posts.length}\n${post.text}`,
-                                )
-                                .join("\n\n"),
-                              `thread-${variantIndex}`,
+      <section className="space-y-3">
+        {result ? (
+          result.format === "thread" ? (
+            <div className="grid gap-2.5 lg:grid-cols-3">
+              {result.variants.map((variant, variantIndex) => (
+                <div
+                  key={`thread-variant-${variantIndex}`}
+                  className="rounded-[0.9rem] border border-panel-border bg-[#171717] p-3 text-white"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-mono text-xs uppercase tracking-[0.18em] text-[#ffb499]">
+                      Variant {variantIndex + 1}
+                    </p>
+                    <CopyActionButton
+                      copied={copyState === `thread-${variantIndex}`}
+                      label={`Copy variant ${variantIndex + 1} thread`}
+                      onClick={() =>
+                        handleCopy(
+                          variant.posts
+                            .map(
+                              (post, index) =>
+                                `${index + 1}/${variant.posts.length}\n${post.text}`,
                             )
-                          }
-                          className="rounded-full border border-white/14 px-3 py-1.5 text-[11px] uppercase tracking-[0.16em] text-white/78 transition hover:border-[#ffb499] hover:text-white"
-                        >
-                          {copyState === `thread-${variantIndex}`
-                            ? "Copied"
-                            : "Copy thread"}
-                        </button>
-                      </div>
-                      <div className="mt-4 space-y-4">
-                        {variant.posts.map((post, postIndex) => (
-                          <div
-                            key={`thread-${variantIndex}-post-${postIndex}`}
-                            className="rounded-[0.95rem] border border-white/8 bg-white/[0.03] p-4"
-                          >
-                            <div className="flex items-center justify-between gap-3">
-                              <p className="font-mono text-xs uppercase tracking-[0.18em] text-[#ffb499]">
-                                {postIndex + 1}/{variant.posts.length}
-                              </p>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  handleCopy(
-                                    post.text,
-                                    `thread-${variantIndex}-post-${postIndex}`,
-                                  )
-                                }
-                                className="rounded-full border border-white/14 px-3 py-1.5 text-[11px] uppercase tracking-[0.16em] text-white/78 transition hover:border-[#ffb499] hover:text-white"
-                              >
-                                {copyState ===
-                                `thread-${variantIndex}-post-${postIndex}`
-                                  ? "Copied"
-                                  : "Copy post"}
-                              </button>
-                            </div>
-                            <p className="mt-2 text-pretty text-base leading-7 text-white">
-                              {post.text}
-                            </p>
-                            <p className="mt-3 font-mono text-xs uppercase tracking-[0.18em] text-white/45">
-                              {post.characters}/{MAX_POST_LENGTH} characters
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="grid gap-4 xl:grid-cols-3">
-                  {result.variants.map((variant, index) => (
-                    <div
-                      key={`post-variant-${index}`}
-                      className="flex h-full flex-col rounded-[1rem] border border-panel-border bg-[#171717] p-4 text-white"
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="font-mono text-xs uppercase tracking-[0.18em] text-[#ffb499]">
-                          Variant {index + 1}
+                            .join("\n\n"),
+                          `thread-${variantIndex}`,
+                        )
+                      }
+                    />
+                  </div>
+                  <div className="mt-2.5 space-y-2">
+                    {variant.posts.map((post, postIndex) => (
+                      <div
+                        key={`thread-${variantIndex}-post-${postIndex}`}
+                        className="rounded-[0.8rem] border border-white/8 bg-white/[0.03] p-2.5"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="font-mono text-xs uppercase tracking-[0.18em] text-[#ffb499]">
+                            {postIndex + 1}/{variant.posts.length}
+                          </p>
+                          <CopyActionButton
+                            copied={
+                              copyState ===
+                              `thread-${variantIndex}-post-${postIndex}`
+                            }
+                            label={`Copy post ${postIndex + 1} from variant ${variantIndex + 1}`}
+                            onClick={() =>
+                              handleCopy(
+                                post.text,
+                                `thread-${variantIndex}-post-${postIndex}`,
+                              )
+                            }
+                          />
+                        </div>
+                        <p className="mt-2 whitespace-pre-wrap break-words text-[15px] leading-6 text-white">
+                          {post.text}
                         </p>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleCopy(variant.post, `post-${index}`)
-                          }
-                          className="rounded-full border border-white/14 px-3 py-1.5 text-[11px] uppercase tracking-[0.16em] text-white/78 transition hover:border-[#ffb499] hover:text-white"
-                        >
-                          {copyState === `post-${index}`
-                            ? "Copied"
-                            : "Copy post"}
-                        </button>
+                        <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.16em] text-white/42">
+                          {post.characters}/{MAX_POST_LENGTH} characters
+                        </p>
                       </div>
-                      <p className="mt-2 text-pretty text-lg leading-8 text-white">
-                        {variant.post}
-                      </p>
-                      <p className="mt-auto pt-3 font-mono text-xs uppercase tracking-[0.18em] text-white/45">
-                        {variant.characters}/{MAX_POST_LENGTH} characters
-                      </p>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-              )
-            ) : (
-              <p className="max-w-sm text-sm leading-7 text-muted">
-                Your generated post or thread variants will appear here.
-              </p>
-            )}
-          </div>
-
-          {error ? (
-            <p className="mt-4 rounded-2xl border border-[#ffb499]/20 bg-[#ffb499]/10 px-4 py-3 text-sm text-[#9f4b2f]">
-              {error}
+              ))}
+            </div>
+          ) : (
+            <div className="grid gap-2.5 lg:grid-cols-3">
+              {result.variants.map((variant, index) => (
+                <div
+                  key={`post-variant-${index}`}
+                  className="rounded-[0.9rem] border border-panel-border bg-[#171717] p-3 text-white"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-mono text-xs uppercase tracking-[0.18em] text-[#ffb499]">
+                      Variant {index + 1}
+                    </p>
+                    <CopyActionButton
+                      copied={copyState === `post-${index}`}
+                      label={`Copy variant ${index + 1} post`}
+                      onClick={() => handleCopy(variant.post, `post-${index}`)}
+                    />
+                  </div>
+                  <p className="mt-2.5 whitespace-pre-wrap break-words text-base leading-6.5 text-white">
+                    {variant.post}
+                  </p>
+                  <p className="mt-2.5 font-mono text-[10px] uppercase tracking-[0.16em] text-white/42">
+                    {variant.characters}/{MAX_POST_LENGTH} characters
+                  </p>
+                </div>
+              ))}
+            </div>
+          )
+        ) : (
+          <div className="rounded-[1rem] border border-dashed border-panel-border/80 bg-white/40 px-4 py-5">
+            <p className="max-w-sm text-sm leading-7 text-muted">
+              Your generated post or thread variants will appear here.
             </p>
-          ) : null}
-        </div>
+          </div>
+        )}
+
+        {error ? (
+          <p className="rounded-2xl border border-[#ffb499]/20 bg-[#ffb499]/10 px-4 py-3 text-sm text-[#9f4b2f]">
+            {error}
+          </p>
+        ) : null}
       </section>
     </div>
   );
