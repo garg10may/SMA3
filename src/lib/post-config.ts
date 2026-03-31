@@ -1,6 +1,8 @@
 export const MAX_BRIEF_LENGTH = 600;
 export const MAX_POST_LENGTH = 280;
 export const DEFAULT_MODEL = "gpt-5-mini";
+export const MAX_THREAD_POSTS = 5;
+export const DEFAULT_THREAD_POSTS = 4;
 
 export const toneOptions = [
   {
@@ -27,8 +29,29 @@ export type ToneOption = (typeof toneOptions)[number]["value"];
 
 export const DEFAULT_TONE: ToneOption = toneOptions[0].value;
 
+export const formatOptions = [
+  {
+    value: "post",
+    label: "Single post",
+    helper: "One tight X post under 280 characters.",
+  },
+  {
+    value: "thread",
+    label: "Short thread",
+    helper: `A compact ${DEFAULT_THREAD_POSTS}-part thread for bigger ideas.`,
+  },
+] as const;
+
+export type FormatOption = (typeof formatOptions)[number]["value"];
+
+export const DEFAULT_FORMAT: FormatOption = formatOptions[0].value;
+
 export function isToneOption(value: string): value is ToneOption {
   return toneOptions.some((tone) => tone.value === value);
+}
+
+export function isFormatOption(value: string): value is FormatOption {
+  return formatOptions.some((format) => format.value === value);
 }
 
 export function getTonePrompt(value: ToneOption) {

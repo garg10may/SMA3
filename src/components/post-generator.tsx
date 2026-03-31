@@ -2,21 +2,37 @@
 
 import { useState, useTransition } from "react";
 import {
+  DEFAULT_FORMAT,
   DEFAULT_TONE,
+  formatOptions,
+  type FormatOption,
+  isFormatOption,
   MAX_BRIEF_LENGTH,
   MAX_POST_LENGTH,
   type ToneOption,
   toneOptions,
 } from "@/lib/post-config";
 
-type GenerateResponse = {
+type PostResult = {
+  format: "post";
   post: string;
   characters: number;
 };
 
+type ThreadResult = {
+  format: "thread";
+  posts: Array<{
+    text: string;
+    characters: number;
+  }>;
+};
+
+type GenerateResponse = PostResult | ThreadResult;
+
 export function PostGenerator() {
   const [brief, setBrief] = useState("");
   const [tone, setTone] = useState<ToneOption>(DEFAULT_TONE);
+  const [format, setFormat] = useState<FormatOption>(DEFAULT_FORMAT);
   const [result, setResult] = useState<GenerateResponse | null>(null);
   const [error, setError] = useState("");
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
@@ -27,6 +43,8 @@ export function PostGenerator() {
   function handleSubmit(formData: FormData) {
     const nextBrief = String(formData.get("brief") ?? "").trim();
     const nextTone = String(formData.get("tone") ?? DEFAULT_TONE) as ToneOption;
+    const rawFormat = String(formData.get("format") ?? DEFAULT_FORMAT);
+    const nextFormat = isFormatOption(rawFormat) ? rawFormat : DEFAULT_FORMAT;
 
     startTransition(async () => {
       setError("");
@@ -41,6 +59,7 @@ export function PostGenerator() {
           body: JSON.stringify({
             brief: nextBrief,
             tone: nextTone,
+            format: nextFormat,
           }),
         });
 
@@ -48,7 +67,11 @@ export function PostGenerator() {
           | GenerateResponse
           | { error?: string };
 
-        if (!response.ok || !("post" in payload)) {
+        if (
+          !response.ok ||
+          !("format" in payload) ||
+          (payload.format !== "post" && payload.format !== "thread")
+        ) {
           setResult(null);
           const message =
             "error" in payload && typeof payload.error === "string"
@@ -74,7 +97,13 @@ export function PostGenerator() {
     }
 
     try {
-      await navigator.clipboard.writeText(result.post);
+      const text =
+        result.format === "thread"
+          ? result.posts
+              .map((post, index) => `${index + 1}/${result.posts.length}\n${post.text}`)
+              .join("\n\n")
+          : result.post;
+      await navigator.clipboard.writeText(text);
       setCopyState("copied");
     } catch {
       setError("Copy failed. You can still select the text manually.");
@@ -122,6 +151,43 @@ export function PostGenerator() {
           </div>
 
           <div className="space-y-2">
+            <label className="font-mono text-xs uppercase tracking-[0.2em] text-white/70">
+              Output type
+            </label>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {formatOptions.map((option) => {
+                const active = format === option.value;
+
+                return (
+                  <label
+                    key={option.value}
+                    className={`cursor-pointer rounded-[1.15rem] border px-4 py-3 transition ${
+                      active
+                        ? "border-[#ffb499] bg-[#ffb499]/12"
+                        : "border-white/12 bg-white/[0.04]"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="format"
+                      value={option.value}
+                      checked={active}
+                      onChange={(event) =>
+                        setFormat(event.target.value as FormatOption)
+                      }
+                      className="sr-only"
+                    />
+                    <p className="text-sm font-medium text-white">{option.label}</p>
+                    <p className="mt-1 text-xs leading-6 text-white/55">
+                      {option.helper}
+                    </p>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="space-y-2">
             <label
               htmlFor="tone"
               className="font-mono text-xs uppercase tracking-[0.2em] text-white/70"
@@ -152,7 +218,11 @@ export function PostGenerator() {
             disabled={isPending || brief.trim().length < 12}
             className="inline-flex w-full items-center justify-center rounded-full bg-[#f6b26b] px-5 py-3 text-sm font-medium text-[#171717] transition hover:bg-[#ffc58f] disabled:cursor-not-allowed disabled:bg-[#c79d6b]"
           >
-            {isPending ? "Writing..." : "Generate post"}
+            {isPending
+              ? "Writing..."
+              : format === "thread"
+                ? "Generate thread"
+                : "Generate post"}
           </button>
         </form>
 
@@ -163,7 +233,9 @@ export function PostGenerator() {
                 Output
               </p>
               <p className="mt-1 text-sm text-white/55">
-                The result is trimmed to stay within {MAX_POST_LENGTH} characters.
+                {result?.format === "thread"
+                  ? `Each post is trimmed to stay within ${MAX_POST_LENGTH} characters.`
+                  : `The result is trimmed to stay within ${MAX_POST_LENGTH} characters.`}
               </p>
             </div>
             <button
@@ -178,17 +250,38 @@ export function PostGenerator() {
 
           <div className="mt-4 min-h-44 rounded-[1.2rem] border border-dashed border-white/10 bg-white/[0.03] p-4">
             {result ? (
-              <div className="space-y-4">
-                <p className="text-pretty text-lg leading-8 text-white">
-                  {result.post}
-                </p>
-                <p className="font-mono text-xs uppercase tracking-[0.18em] text-white/45">
-                  {result.characters}/{MAX_POST_LENGTH} characters
-                </p>
-              </div>
+              result.format === "thread" ? (
+                <div className="space-y-4">
+                  {result.posts.map((post, index) => (
+                    <div
+                      key={`${index}-${post.text.slice(0, 24)}`}
+                      className="rounded-[1rem] border border-white/8 bg-white/[0.03] p-4"
+                    >
+                      <p className="font-mono text-xs uppercase tracking-[0.18em] text-[#ffb499]">
+                        {index + 1}/{result.posts.length}
+                      </p>
+                      <p className="mt-2 text-pretty text-base leading-7 text-white">
+                        {post.text}
+                      </p>
+                      <p className="mt-3 font-mono text-xs uppercase tracking-[0.18em] text-white/45">
+                        {post.characters}/{MAX_POST_LENGTH} characters
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <p className="text-pretty text-lg leading-8 text-white">
+                    {result.post}
+                  </p>
+                  <p className="font-mono text-xs uppercase tracking-[0.18em] text-white/45">
+                    {result.characters}/{MAX_POST_LENGTH} characters
+                  </p>
+                </div>
+              )
             ) : (
               <p className="max-w-sm text-sm leading-7 text-white/40">
-                Your generated post will appear here.
+                Your generated post or thread will appear here.
               </p>
             )}
           </div>

@@ -18,8 +18,8 @@ export default function Home() {
               </h1>
               <p className="max-w-xl text-base leading-8 text-muted sm:text-lg">
                 Drop in a topic, launch note, or half-formed idea. The app uses
-                OpenAI to turn it into a short, publishable post that stays
-                tight and platform-friendly.
+                OpenAI to turn it into a publishable post or a compact thread
+                that stays tight and platform-friendly.
               </p>
             </div>
           </div>
@@ -30,7 +30,8 @@ export default function Home() {
                 Focused
               </p>
               <p className="mt-2 leading-7">
-                Built for one job: fast copy you can actually post.
+                Built for one job: fast copy you can actually post, even when
+                the idea needs multiple parts.
               </p>
             </div>
             <div className="rounded-3xl border border-panel-border bg-white/60 p-4">
@@ -46,7 +47,7 @@ export default function Home() {
                 X-ready
               </p>
               <p className="mt-2 leading-7">
-                Responses are kept short and checked against the character cap.
+                Every post in the output is checked against the character cap.
               </p>
             </div>
           </div>
