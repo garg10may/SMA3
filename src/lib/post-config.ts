@@ -1,9 +1,23 @@
 export const MAX_BRIEF_LENGTH = 600;
 export const MAX_POST_LENGTH = 280;
+export const MAX_MEDIUM_WORDS = 1400;
 export const DEFAULT_MODEL = "gpt-5-mini";
 export const MAX_THREAD_POSTS = 5;
 export const DEFAULT_THREAD_POSTS = 4;
 export const VARIANT_COUNT = 3;
+
+export const platformOptions = [
+  {
+    value: "x",
+    label: "X",
+    helper: "Generate short-form posts and threads for X.",
+  },
+  {
+    value: "medium",
+    label: "Medium",
+    helper: "Generate one Medium-ready story you can paste directly into the editor.",
+  },
+] as const;
 
 export const toneOptions = [
   {
@@ -43,9 +57,15 @@ export const formatOptions = [
   },
 ] as const;
 
+export type PlatformOption = (typeof platformOptions)[number]["value"];
 export type FormatOption = (typeof formatOptions)[number]["value"];
 
+export const DEFAULT_PLATFORM: PlatformOption = platformOptions[0].value;
 export const DEFAULT_FORMAT: FormatOption = formatOptions[0].value;
+
+export function isPlatformOption(value: string): value is PlatformOption {
+  return platformOptions.some((platform) => platform.value === value);
+}
 
 export function isToneOption(value: string): value is ToneOption {
   return toneOptions.some((tone) => tone.value === value);
