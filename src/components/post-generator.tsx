@@ -1,12 +1,11 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { type FormEvent, useState, useTransition } from "react";
 import {
   DEFAULT_FORMAT,
   DEFAULT_TONE,
   formatOptions,
   type FormatOption,
-  isFormatOption,
   MAX_BRIEF_LENGTH,
   MAX_POST_LENGTH,
   type ToneOption,
@@ -115,11 +114,12 @@ export function PostGenerator() {
 
   const briefRemaining = MAX_BRIEF_LENGTH - brief.length;
 
-  function handleSubmit(formData: FormData) {
-    const nextBrief = String(formData.get("brief") ?? "").trim();
-    const nextTone = String(formData.get("tone") ?? DEFAULT_TONE) as ToneOption;
-    const rawFormat = String(formData.get("format") ?? DEFAULT_FORMAT);
-    const nextFormat = isFormatOption(rawFormat) ? rawFormat : DEFAULT_FORMAT;
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const nextBrief = brief.trim();
+    const nextTone = tone;
+    const nextFormat = format;
 
     startTransition(async () => {
       setError("");
@@ -191,7 +191,7 @@ export function PostGenerator() {
             </p>
           </div>
 
-          <form action={handleSubmit} className="mt-5 space-y-4">
+          <form onSubmit={handleSubmit} className="mt-5 space-y-4">
             <div className="space-y-2">
               <label
                 htmlFor="brief"
