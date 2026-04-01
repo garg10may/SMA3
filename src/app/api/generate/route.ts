@@ -8,8 +8,11 @@ import {
 import { generateMediumLeadImage } from "@/lib/medium-image-server";
 import {
   DEFAULT_FORMAT,
+  DEFAULT_IMAGE_MODEL,
+  DEFAULT_IMAGE_QUALITY,
   DEFAULT_MODEL,
   DEFAULT_PLATFORM,
+  DEFAULT_REASONING_EFFORT,
   DEFAULT_TONE,
   DEFAULT_THREAD_POSTS,
   MAX_MEDIUM_WORDS,
@@ -17,9 +20,13 @@ import {
   MAX_BRIEF_LENGTH,
   MAX_POST_LENGTH,
   VARIANT_COUNT,
+  isImageQualityOption,
+  isImageModelOption,
   isFormatOption,
   getTonePrompt,
+  isReasoningEffortOption,
   isPlatformOption,
+  isTextModelOption,
   isToneOption,
 } from "@/lib/post-config";
 
@@ -365,6 +372,38 @@ export async function POST(request: Request) {
       ? payload.imagePrompt.trim()
       : "";
 
+  const rawReasoningEffort =
+    typeof payload === "object" &&
+    payload !== null &&
+    "reasoningEffort" in payload &&
+    typeof payload.reasoningEffort === "string"
+      ? payload.reasoningEffort
+      : DEFAULT_REASONING_EFFORT;
+
+  const rawModel =
+    typeof payload === "object" &&
+    payload !== null &&
+    "model" in payload &&
+    typeof payload.model === "string"
+      ? payload.model
+      : process.env.OPENAI_MODEL ?? DEFAULT_MODEL;
+
+  const rawImageModel =
+    typeof payload === "object" &&
+    payload !== null &&
+    "imageModel" in payload &&
+    typeof payload.imageModel === "string"
+      ? payload.imageModel
+      : DEFAULT_IMAGE_MODEL;
+
+  const rawImageQuality =
+    typeof payload === "object" &&
+    payload !== null &&
+    "imageQuality" in payload &&
+    typeof payload.imageQuality === "string"
+      ? payload.imageQuality
+      : DEFAULT_IMAGE_QUALITY;
+
   if (rawBrief.length < 12 || rawBrief.length > MAX_BRIEF_LENGTH) {
     return NextResponse.json(
       {
@@ -380,17 +419,24 @@ export async function POST(request: Request) {
   const imageStyle = isMediumImageStyleOption(rawImageStyle)
     ? rawImageStyle
     : DEFAULT_MEDIUM_IMAGE_STYLE;
+  const model = isTextModelOption(rawModel) ? rawModel : DEFAULT_MODEL;
+  const reasoningEffort = isReasoningEffortOption(rawReasoningEffort)
+    ? rawReasoningEffort
+    : DEFAULT_REASONING_EFFORT;
+  const imageModel = isImageModelOption(rawImageModel)
+    ? rawImageModel
+    : DEFAULT_IMAGE_MODEL;
+  const imageQuality = isImageQualityOption(rawImageQuality)
+    ? rawImageQuality
+    : DEFAULT_IMAGE_QUALITY;
 
   try {
     const openai = new OpenAI({ apiKey });
-    const model = process.env.OPENAI_MODEL ?? DEFAULT_MODEL;
 
     const response = await openai.responses.create({
       model,
       max_output_tokens: platform === "medium" ? 1800 : 1200,
-      ...(model.startsWith("gpt-5")
-        ? { reasoning: { effort: "minimal" as const } }
-        : {}),
+      reasoning: { effort: reasoningEffort },
       input: [
         {
           role: "system",
@@ -472,6 +518,8 @@ export async function POST(request: Request) {
           audience: rawAudience,
           mediumGoal: rawMediumGoal,
           imageStyle,
+          imageModel,
+          imageQuality,
           imagePrompt: rawImagePrompt,
           title,
           excerpt,
@@ -493,6 +541,10 @@ export async function POST(request: Request) {
         leadImageDataUrl,
         imagePrompt,
         imageStyle,
+        model,
+        reasoningEffort,
+        imageModel,
+        imageQuality,
         mathEmbeds,
       });
     }

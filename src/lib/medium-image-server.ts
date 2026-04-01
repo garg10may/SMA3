@@ -1,5 +1,10 @@
 import OpenAI from "openai";
-import { DEFAULT_IMAGE_MODEL } from "@/lib/post-config";
+import {
+  DEFAULT_IMAGE_MODEL,
+  DEFAULT_IMAGE_QUALITY,
+  type ImageQualityOption,
+  type ImageModelOption,
+} from "@/lib/post-config";
 import {
   buildMediumLeadImagePrompt,
   type MediumImageStyleOption,
@@ -11,6 +16,8 @@ type GenerateMediumLeadImageInput = {
   audience: string;
   mediumGoal: string;
   imageStyle: MediumImageStyleOption;
+  imageModel?: ImageModelOption;
+  imageQuality?: ImageQualityOption;
   imagePrompt?: string;
   title?: string;
   excerpt?: string;
@@ -30,10 +37,10 @@ export async function generateMediumLeadImage(
   });
 
   const imageResponse = await input.openai.images.generate({
-    model: DEFAULT_IMAGE_MODEL,
+    model: input.imageModel ?? DEFAULT_IMAGE_MODEL,
     prompt,
     size: "1536x1024",
-    quality: "high",
+    quality: input.imageQuality ?? DEFAULT_IMAGE_QUALITY,
     output_format: "png",
     background: "opaque",
     n: 1,
@@ -53,5 +60,7 @@ export async function generateMediumLeadImage(
     leadImageDataUrl: `data:image/png;base64,${imageBase64}`,
     imagePrompt: prompt,
     imageStyle: input.imageStyle,
+    imageModel: input.imageModel ?? DEFAULT_IMAGE_MODEL,
+    imageQuality: input.imageQuality ?? DEFAULT_IMAGE_QUALITY,
   };
 }

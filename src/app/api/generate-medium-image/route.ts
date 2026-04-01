@@ -5,6 +5,12 @@ import {
   isMediumImageStyleOption,
 } from "@/lib/medium-image";
 import { generateMediumLeadImage } from "@/lib/medium-image-server";
+import {
+  DEFAULT_IMAGE_MODEL,
+  DEFAULT_IMAGE_QUALITY,
+  isImageQualityOption,
+  isImageModelOption,
+} from "@/lib/post-config";
 
 export const runtime = "nodejs";
 
@@ -77,6 +83,22 @@ export async function POST(request: Request) {
       ? payload.title.trim()
       : "";
 
+  const rawImageModel =
+    typeof payload === "object" &&
+    payload !== null &&
+    "imageModel" in payload &&
+    typeof payload.imageModel === "string"
+      ? payload.imageModel
+      : DEFAULT_IMAGE_MODEL;
+
+  const rawImageQuality =
+    typeof payload === "object" &&
+    payload !== null &&
+    "imageQuality" in payload &&
+    typeof payload.imageQuality === "string"
+      ? payload.imageQuality
+      : DEFAULT_IMAGE_QUALITY;
+
   const rawExcerpt =
     typeof payload === "object" &&
     payload !== null &&
@@ -98,6 +120,12 @@ export async function POST(request: Request) {
   const imageStyle = isMediumImageStyleOption(rawImageStyle)
     ? rawImageStyle
     : DEFAULT_MEDIUM_IMAGE_STYLE;
+  const imageModel = isImageModelOption(rawImageModel)
+    ? rawImageModel
+    : DEFAULT_IMAGE_MODEL;
+  const imageQuality = isImageQualityOption(rawImageQuality)
+    ? rawImageQuality
+    : DEFAULT_IMAGE_QUALITY;
 
   try {
     const openai = new OpenAI({ apiKey });
@@ -107,6 +135,8 @@ export async function POST(request: Request) {
       audience: rawAudience,
       mediumGoal: rawMediumGoal,
       imageStyle,
+      imageModel,
+      imageQuality,
       imagePrompt: rawImagePrompt,
       title: rawTitle,
       excerpt: rawExcerpt,

@@ -19,15 +19,29 @@ import {
 import { renderMediumMarkdown } from "@/lib/medium-format";
 import {
   DEFAULT_FORMAT,
+  DEFAULT_IMAGE_MODEL,
+  DEFAULT_IMAGE_QUALITY,
   DEFAULT_PLATFORM,
+  DEFAULT_REASONING_EFFORT,
   DEFAULT_TONE,
+  DEFAULT_MODEL,
   formatOptions,
+  imageQualityOptions,
+  imageModelOptions,
+  isImageQualityOption,
+  isImageModelOption,
   MAX_BRIEF_LENGTH,
   MAX_MEDIUM_WORDS,
   MAX_POST_LENGTH,
   platformOptions,
+  reasoningEffortOptions,
+  textModelOptions,
   type FormatOption,
+  type ImageQualityOption,
+  type ImageModelOption,
   type PlatformOption,
+  type ReasoningEffortOption,
+  type TextModelOption,
   type ToneOption,
   toneOptions,
   VARIANT_COUNT,
@@ -76,6 +90,10 @@ type MediumResult = {
   leadImageDataUrl: string | null;
   imagePrompt: string;
   imageStyle: MediumImageStyleOption;
+  model: TextModelOption;
+  reasoningEffort: ReasoningEffortOption;
+  imageModel: ImageModelOption;
+  imageQuality: ImageQualityOption;
   mathEmbeds: {
     token: string;
     latex: string;
@@ -91,6 +109,8 @@ type MediumImageResponse = {
   leadImageDataUrl: string;
   imagePrompt: string;
   imageStyle: MediumImageStyleOption;
+  imageModel: ImageModelOption;
+  imageQuality: ImageQualityOption;
 };
 
 type MediumImageVersion = MediumImageResponse & {
@@ -214,6 +234,25 @@ function RefreshIcon() {
   );
 }
 
+function InfoIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 16 16"
+      className="h-3.5 w-3.5"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.35"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="8" cy="8" r="5.75" />
+      <path d="M8 7v3" />
+      <path d="M8 5.25h.01" />
+    </svg>
+  );
+}
+
 function CopyActionButton({
   copied,
   label,
@@ -251,6 +290,34 @@ function FieldLabel({
     >
       {children}
     </label>
+  );
+}
+
+function FieldLabelWithInfo({
+  children,
+  htmlFor,
+  info,
+}: {
+  children: string;
+  htmlFor?: string;
+  info: string;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <FieldLabel htmlFor={htmlFor}>{children}</FieldLabel>
+      <div className="group relative">
+        <button
+          type="button"
+          aria-label={`${children} info`}
+          className="inline-flex h-5 w-5 items-center justify-center rounded-full text-white/46 transition hover:text-[#ffb499] focus-visible:text-[#ffb499] focus-visible:outline-none"
+        >
+          <InfoIcon />
+        </button>
+        <div className="pointer-events-none absolute left-1/2 top-full z-20 mt-2 hidden w-64 -translate-x-1/2 rounded-[0.9rem] border border-white/12 bg-[#1e1e1e] p-3 text-[11px] leading-5 text-white/75 shadow-[0_18px_40px_rgba(0,0,0,0.35)] group-hover:block group-focus-within:block">
+          {info}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -816,6 +883,13 @@ function MediumComposer() {
   const [audience, setAudience] = useState("");
   const [goal, setGoal] = useState("Teach a practical lesson");
   const [tone, setTone] = useState<ToneOption>(DEFAULT_TONE);
+  const [model, setModel] = useState<TextModelOption>(DEFAULT_MODEL);
+  const [reasoningEffort, setReasoningEffort] =
+    useState<ReasoningEffortOption>(DEFAULT_REASONING_EFFORT);
+  const [imageModel, setImageModel] =
+    useState<ImageModelOption>(DEFAULT_IMAGE_MODEL);
+  const [imageQuality, setImageQuality] =
+    useState<ImageQualityOption>(DEFAULT_IMAGE_QUALITY);
   const [imageStyle, setImageStyle] = useState<MediumImageStyleOption>(
     DEFAULT_MEDIUM_IMAGE_STYLE,
   );
@@ -865,6 +939,10 @@ function MediumComposer() {
     const nextAudience = audience.trim();
     const nextGoal = goal;
     const nextTone = tone;
+    const nextModel = model;
+    const nextReasoningEffort = reasoningEffort;
+    const nextImageModel = imageModel;
+    const nextImageQuality = imageQuality;
     const nextImageStyle = imageStyle;
     const nextImagePrompt = imagePrompt.trim();
     const nextIncludeCode = includeCode;
@@ -883,8 +961,12 @@ function MediumComposer() {
             platform: "medium",
             brief: nextBrief,
             tone: nextTone,
+            model: nextModel,
+            reasoningEffort: nextReasoningEffort,
             audience: nextAudience,
             mediumGoal: nextGoal,
+            imageModel: nextImageModel,
+            imageQuality: nextImageQuality,
             imageStyle: nextImageStyle,
             imagePrompt: nextImagePrompt,
             includeCode: nextIncludeCode,
@@ -918,11 +1000,17 @@ function MediumComposer() {
                   leadImageDataUrl: payload.leadImageDataUrl,
                   imagePrompt: payload.imagePrompt,
                   imageStyle: payload.imageStyle,
+                  imageModel: payload.imageModel,
+                  imageQuality: payload.imageQuality,
                 }),
               ]
             : [];
         setImageHistory(nextImageHistory);
         setSelectedImageId(nextImageHistory[0]?.id ?? "");
+        setModel(payload.model);
+        setReasoningEffort(payload.reasoningEffort);
+        setImageModel(payload.imageModel);
+        setImageQuality(payload.imageQuality);
         setImageStyle(payload.imageStyle);
         setIsRefreshingImage(false);
 
@@ -968,6 +1056,8 @@ function MediumComposer() {
           brief: brief.trim(),
           audience: audience.trim(),
           mediumGoal: goal,
+          imageModel,
+          imageQuality,
           imageStyle,
           imagePrompt: imagePrompt.trim(),
           title: result.title,
@@ -1001,6 +1091,8 @@ function MediumComposer() {
               leadImageDataUrl: payload.leadImageDataUrl,
               imagePrompt: payload.imagePrompt,
               imageStyle: payload.imageStyle,
+              imageModel: payload.imageModel,
+              imageQuality: payload.imageQuality,
             }
           : current,
       );
@@ -1060,6 +1152,38 @@ function MediumComposer() {
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
+                <FieldLabelWithInfo
+                  htmlFor="medium-model"
+                  info={textModelOptions
+                    .map(
+                      (option) =>
+                        `${option.label}: ${option.cost}. ${option.helper}`,
+                    )
+                    .join(" ")}
+                >
+                  Writing model
+                </FieldLabelWithInfo>
+                <select
+                  id="medium-model"
+                  value={model}
+                  onChange={(event) =>
+                    setModel(event.target.value as TextModelOption)
+                  }
+                  className="w-full rounded-[0.95rem] border border-white/12 bg-white/[0.06] px-3.5 py-2.5 text-sm text-white outline-none transition focus:border-[#ffb499]"
+                >
+                  {textModelOptions.map((option) => (
+                    <option
+                      key={option.value}
+                      value={option.value}
+                      className="bg-[#171717]"
+                    >
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-2">
                 <FieldLabel htmlFor="medium-audience">Target reader</FieldLabel>
                 <input
                   id="medium-audience"
@@ -1068,25 +1192,6 @@ function MediumComposer() {
                   placeholder="Founders, engineers, growth teams..."
                   className="w-full rounded-[0.95rem] border border-white/12 bg-white/[0.06] px-3.5 py-2.5 text-sm text-white outline-none transition focus:border-[#ffb499]"
                 />
-              </div>
-
-              <div className="space-y-2">
-                <FieldLabel htmlFor="medium-goal">Article goal</FieldLabel>
-                <select
-                  id="medium-goal"
-                  value={goal}
-                  onChange={(event) => setGoal(event.target.value)}
-                  className="w-full rounded-[0.95rem] border border-white/12 bg-white/[0.06] px-3.5 py-2.5 text-sm text-white outline-none transition focus:border-[#ffb499]"
-                >
-                  <option className="bg-[#171717]">Teach a practical lesson</option>
-                  <option className="bg-[#171717]">
-                    Tell a story with a takeaway
-                  </option>
-                  <option className="bg-[#171717]">
-                    Make an argument with examples
-                  </option>
-                  <option className="bg-[#171717]">Break down a workflow</option>
-                </select>
               </div>
             </div>
 
@@ -1111,6 +1216,138 @@ function MediumComposer() {
                 </select>
               </div>
 
+              <div className="space-y-2">
+                <FieldLabelWithInfo
+                  htmlFor="medium-reasoning"
+                  info={reasoningEffortOptions
+                    .map(
+                      (option) => `${option.label}: ${option.helper}`,
+                    )
+                    .join(" ") +
+                    " There is no separate listed surcharge for reasoning levels, but higher effort typically uses more compute and can increase total token usage, latency, and spend."}
+                >
+                  Reasoning
+                </FieldLabelWithInfo>
+                <select
+                  id="medium-reasoning"
+                  value={reasoningEffort}
+                  onChange={(event) => {
+                    const nextValue = event.target.value;
+                    if (
+                      reasoningEffortOptions.some(
+                        (option) => option.value === nextValue,
+                      )
+                    ) {
+                      setReasoningEffort(nextValue as ReasoningEffortOption);
+                    }
+                  }}
+                  className="w-full rounded-[0.95rem] border border-white/12 bg-white/[0.06] px-3.5 py-2.5 text-sm text-white outline-none transition focus:border-[#ffb499]"
+                >
+                  {reasoningEffortOptions.map((option) => (
+                    <option
+                      key={option.value}
+                      value={option.value}
+                      className="bg-[#171717]"
+                    >
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <FieldLabel htmlFor="medium-goal">Article goal</FieldLabel>
+                <select
+                  id="medium-goal"
+                  value={goal}
+                  onChange={(event) => setGoal(event.target.value)}
+                  className="w-full rounded-[0.95rem] border border-white/12 bg-white/[0.06] px-3.5 py-2.5 text-sm text-white outline-none transition focus:border-[#ffb499]"
+                >
+                  <option className="bg-[#171717]">Teach a practical lesson</option>
+                  <option className="bg-[#171717]">
+                    Tell a story with a takeaway
+                  </option>
+                  <option className="bg-[#171717]">
+                    Make an argument with examples
+                  </option>
+                  <option className="bg-[#171717]">Break down a workflow</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <FieldLabelWithInfo
+                  htmlFor="medium-image-model"
+                  info={imageModelOptions
+                    .map(
+                      (option) =>
+                        `${option.label}: ${option.cost}. ${option.helper}`,
+                    )
+                    .join(" ")}
+                >
+                  Image model
+                </FieldLabelWithInfo>
+                <select
+                  id="medium-image-model"
+                  value={imageModel}
+                  onChange={(event) => {
+                    const nextValue = event.target.value;
+                    if (isImageModelOption(nextValue)) {
+                      setImageModel(nextValue);
+                    }
+                  }}
+                  className="w-full rounded-[0.95rem] border border-white/12 bg-white/[0.06] px-3.5 py-2.5 text-sm text-white outline-none transition focus:border-[#ffb499]"
+                >
+                  {imageModelOptions.map((option) => (
+                    <option
+                      key={option.value}
+                      value={option.value}
+                      className="bg-[#171717]"
+                    >
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-2">
+                <FieldLabelWithInfo
+                  htmlFor="medium-image-quality"
+                  info={imageQualityOptions
+                    .map((option) => `${option.label}: ${option.helper}`)
+                    .join(" ") +
+                    " Current 1536x1024 pricing depends on both model and quality. GPT Image 1 mini: $0.006 / $0.015 / $0.052 at low / medium / high. GPT Image 1: $0.016 / $0.063 / $0.25. GPT Image 1.5: $0.013 / $0.05 / $0.20."}
+                >
+                  Image quality
+                </FieldLabelWithInfo>
+                <select
+                  id="medium-image-quality"
+                  value={imageQuality}
+                  onChange={(event) => {
+                    const nextValue = event.target.value;
+                    if (isImageQualityOption(nextValue)) {
+                      setImageQuality(nextValue);
+                    }
+                  }}
+                  className="w-full rounded-[0.95rem] border border-white/12 bg-white/[0.06] px-3.5 py-2.5 text-sm text-white outline-none transition focus:border-[#ffb499]"
+                >
+                  {imageQualityOptions.map((option) => (
+                    <option
+                      key={option.value}
+                      value={option.value}
+                      className="bg-[#171717]"
+                    >
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <FieldLabel htmlFor="medium-image-style">Image type</FieldLabel>
                 <select
