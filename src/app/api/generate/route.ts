@@ -1,8 +1,13 @@
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
 import {
+  buildMediumLeadImagePrompt,
+  DEFAULT_MEDIUM_IMAGE_STYLE,
+  isMediumImageStyleOption,
+} from "@/lib/medium-image";
+import { generateMediumLeadImage } from "@/lib/medium-image-server";
+import {
   DEFAULT_FORMAT,
-  DEFAULT_IMAGE_MODEL,
   DEFAULT_MODEL,
   DEFAULT_PLATFORM,
   DEFAULT_TONE,
@@ -183,30 +188,6 @@ function extractMediumExcerpt(markdown: string) {
   return lines.slice(0, 2).join(" ").slice(0, 320);
 }
 
-function buildLeadImagePrompt(input: {
-  brief: string;
-  audience: string;
-  mediumGoal: string;
-  title: string;
-  excerpt: string;
-}) {
-  return `Create a striking editorial lead image for a Medium article.
-
-Article title: ${input.title}
-Article angle: ${input.brief}
-Target reader: ${input.audience || "General professional audience"}
-Article goal: ${input.mediumGoal || "Teach a practical lesson"}
-Supporting context: ${input.excerpt}
-
-Requirements:
-- Landscape hero image, suitable as the opening image for a Medium post
-- Strong focal point, clean composition, emotionally engaging but not cheesy
-- Editorial illustration or cinematic conceptual scene, not UI screenshots
-- No text, captions, logos, watermarks, borders, or split panels
-- Visually specific to the article idea, not generic stock-photo aesthetics
-- High detail, modern, polished, professional`;
-}
-
 function getSystemPrompt(platform: "x" | "medium", format: "post" | "thread") {
   if (platform === "medium") {
     return `You write Medium-ready articles that paste cleanly into the Medium editor. Return one complete article in Markdown.
@@ -368,6 +349,22 @@ export async function POST(request: Request) {
       ? payload.includeCode
       : true;
 
+  const rawImageStyle =
+    typeof payload === "object" &&
+    payload !== null &&
+    "imageStyle" in payload &&
+    typeof payload.imageStyle === "string"
+      ? payload.imageStyle
+      : DEFAULT_MEDIUM_IMAGE_STYLE;
+
+  const rawImagePrompt =
+    typeof payload === "object" &&
+    payload !== null &&
+    "imagePrompt" in payload &&
+    typeof payload.imagePrompt === "string"
+      ? payload.imagePrompt.trim()
+      : "";
+
   if (rawBrief.length < 12 || rawBrief.length > MAX_BRIEF_LENGTH) {
     return NextResponse.json(
       {
@@ -380,6 +377,9 @@ export async function POST(request: Request) {
   const tone = isToneOption(rawTone) ? rawTone : DEFAULT_TONE;
   const platform = isPlatformOption(rawPlatform) ? rawPlatform : DEFAULT_PLATFORM;
   const format = isFormatOption(rawFormat) ? rawFormat : DEFAULT_FORMAT;
+  const imageStyle = isMediumImageStyleOption(rawImageStyle)
+    ? rawImageStyle
+    : DEFAULT_MEDIUM_IMAGE_STYLE;
 
   try {
     const openai = new OpenAI({ apiKey });
@@ -439,6 +439,16 @@ export async function POST(request: Request) {
       const title = extractMediumTitle(markdown);
       const excerpt = extractMediumExcerpt(markdown);
       let leadImageDataUrl: string | null = null;
+      let leadImageAlt = title ? `Lead image for ${title}` : "Lead image for the article";
+      let imagePrompt = buildMediumLeadImagePrompt({
+        brief: rawBrief,
+        audience: rawAudience,
+        mediumGoal: rawMediumGoal,
+        imageStyle,
+        customPrompt: rawImagePrompt,
+        title,
+        excerpt,
+      });
       let mathEmbeds: MediumMathEmbed[] = [];
 
       if (extractedMath.mathBlocks.length > 0) {
@@ -456,38 +466,33 @@ export async function POST(request: Request) {
       }
 
       try {
-        const imageResponse = await openai.images.generate({
-          model: DEFAULT_IMAGE_MODEL,
-          prompt: buildLeadImagePrompt({
-            brief: rawBrief,
-            audience: rawAudience,
-            mediumGoal: rawMediumGoal,
-            title,
-            excerpt,
-          }),
-          size: "1536x1024",
-          quality: "high",
-          output_format: "png",
-          background: "opaque",
-          n: 1,
-          stream: false,
+        const image = await generateMediumLeadImage({
+          openai,
+          brief: rawBrief,
+          audience: rawAudience,
+          mediumGoal: rawMediumGoal,
+          imageStyle,
+          imagePrompt: rawImagePrompt,
+          title,
+          excerpt,
         });
-
-        const imageBase64 = imageResponse.data?.[0]?.b64_json;
-
-        if (imageBase64) {
-          leadImageDataUrl = `data:image/png;base64,${imageBase64}`;
-        }
+        leadImageAlt = image.leadImageAlt;
+        leadImageDataUrl = image.leadImageDataUrl;
+        imagePrompt = image.imagePrompt;
       } catch (imageError) {
         console.error("OpenAI image generation failed", imageError);
       }
 
       return NextResponse.json({
         format: "medium",
+        title,
+        excerpt,
         markdown: extractedMath.markdown,
         words: extractedMath.markdown.split(/\s+/).filter(Boolean).length,
-        leadImageAlt: `Lead image for ${title}`,
+        leadImageAlt,
         leadImageDataUrl,
+        imagePrompt,
+        imageStyle,
         mathEmbeds,
       });
     }

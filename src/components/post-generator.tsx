@@ -9,6 +9,13 @@ import {
   useState,
   useTransition,
 } from "react";
+import {
+  DEFAULT_MEDIUM_IMAGE_STYLE,
+  buildMediumLeadImagePrompt,
+  getMediumImageStyleLabel,
+  mediumImageStyleOptions,
+  type MediumImageStyleOption,
+} from "@/lib/medium-image";
 import { renderMediumMarkdown } from "@/lib/medium-format";
 import {
   DEFAULT_FORMAT,
@@ -61,10 +68,14 @@ type ThreadResult = {
 
 type MediumResult = {
   format: "medium";
+  title: string;
+  excerpt: string;
   markdown: string;
   words: number;
   leadImageAlt: string;
   leadImageDataUrl: string | null;
+  imagePrompt: string;
+  imageStyle: MediumImageStyleOption;
   mathEmbeds: {
     token: string;
     latex: string;
@@ -73,6 +84,17 @@ type MediumResult = {
     width: number;
     height: number;
   }[];
+};
+
+type MediumImageResponse = {
+  leadImageAlt: string;
+  leadImageDataUrl: string;
+  imagePrompt: string;
+  imageStyle: MediumImageStyleOption;
+};
+
+type MediumImageVersion = MediumImageResponse & {
+  id: string;
 };
 
 type ShortPack = {
@@ -168,6 +190,26 @@ function CheckIcon() {
       strokeLinejoin="round"
     >
       <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />
+    </svg>
+  );
+}
+
+function RefreshIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 16 16"
+      className="h-3.5 w-3.5"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.45"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M13 5.5V2.5h-3" />
+      <path d="M3 10.5v3h3" />
+      <path d="M12.2 7A4.5 4.5 0 0 0 4.6 4.3L3 5.5" />
+      <path d="M3.8 9A4.5 4.5 0 0 0 11.4 11.7L13 10.5" />
     </svg>
   );
 }
@@ -346,6 +388,17 @@ function buildMediumPreviewHtml(result: MediumResult) {
   return html;
 }
 
+function createMediumImageVersion(
+  image: MediumImageResponse,
+): MediumImageVersion {
+  return {
+    id:
+      globalThis.crypto?.randomUUID?.() ??
+      `medium-image-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    ...image,
+  };
+}
+
 function buildShortCaptionCopy(pack: ShortPack) {
   const hashtags = pack.hashtags.join(" ");
 
@@ -384,6 +437,68 @@ function EmptyState({ copy }: { copy: string }) {
   return (
     <div className="rounded-[1rem] border border-dashed border-panel-border/80 bg-white/40 px-4 py-5">
       <p className="max-w-md text-sm leading-7 text-muted">{copy}</p>
+    </div>
+  );
+}
+
+function MediumIdleState() {
+  return (
+    <div className="rounded-[1.6rem] border border-panel-border bg-[#171717] p-3 text-white shadow-[0_24px_80px_rgba(23,23,23,0.14)] sm:p-4">
+      <div className="rounded-[1.35rem] border border-dashed border-white/12 bg-white/[0.04] p-5 sm:p-6">
+        <p className="font-mono text-xs uppercase tracking-[0.18em] text-[#ffb499]">
+          Medium Preview
+        </p>
+        <h3 className="mt-3 text-xl font-semibold tracking-[-0.04em] text-white">
+          Ready for one finished draft
+        </h3>
+        <p className="mt-3 max-w-lg text-sm leading-7 text-white/60">
+          Generate a story to preview the full article, lead image, and
+          Medium-ready formatting in this pane.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function MediumLoadingState() {
+  return (
+    <div className="rounded-[1.6rem] border border-panel-border bg-[#171717] p-3 text-white shadow-[0_24px_80px_rgba(23,23,23,0.14)] sm:p-4">
+      <div className="rounded-[1.35rem] border border-white/10 bg-white/[0.04] p-5 sm:p-6">
+        <div className="flex items-center gap-3">
+          <span
+            aria-hidden="true"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[#ffb499]/25 bg-[#ffb499]/10"
+          >
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#ffb499]/30 border-t-[#ffb499]" />
+          </span>
+          <div>
+            <p className="font-mono text-xs uppercase tracking-[0.18em] text-[#ffb499]">
+              Medium Draft
+            </p>
+            <p className="mt-1 text-sm text-white/68">
+              Writing your story and preparing the preview.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-6 rounded-[1rem] border border-white/8 bg-[#f8f2e8] p-5">
+          <div className="animate-pulse space-y-4">
+            <div className="h-44 rounded-[1rem] bg-[#ead8c2]" />
+            <div className="h-8 w-3/4 rounded-full bg-[#ead8c2]" />
+            <div className="space-y-3">
+              <div className="h-4 rounded-full bg-[#ead8c2]" />
+              <div className="h-4 rounded-full bg-[#ead8c2]" />
+              <div className="h-4 w-5/6 rounded-full bg-[#ead8c2]" />
+            </div>
+            <div className="space-y-3 pt-3">
+              <div className="h-5 w-1/3 rounded-full bg-[#ead8c2]" />
+              <div className="h-4 rounded-full bg-[#ead8c2]" />
+              <div className="h-4 w-11/12 rounded-full bg-[#ead8c2]" />
+              <div className="h-4 w-4/5 rounded-full bg-[#ead8c2]" />
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -701,13 +816,47 @@ function MediumComposer() {
   const [audience, setAudience] = useState("");
   const [goal, setGoal] = useState("Teach a practical lesson");
   const [tone, setTone] = useState<ToneOption>(DEFAULT_TONE);
+  const [imageStyle, setImageStyle] = useState<MediumImageStyleOption>(
+    DEFAULT_MEDIUM_IMAGE_STYLE,
+  );
+  const [imagePrompt, setImagePrompt] = useState("");
+  const [imagePromptEdited, setImagePromptEdited] = useState(false);
   const [includeCode, setIncludeCode] = useState(true);
   const [result, setResult] = useState<MediumResult | null>(null);
+  const [imageHistory, setImageHistory] = useState<MediumImageVersion[]>([]);
+  const [selectedImageId, setSelectedImageId] = useState("");
   const [error, setError] = useState("");
   const [copyState, setCopyState] = useState("");
+  const [isRefreshingImage, setIsRefreshingImage] = useState(false);
   const [isPending, startTransition] = useTransition();
 
   const briefRemaining = MAX_BRIEF_LENGTH - brief.length;
+  const suggestedImagePrompt = buildMediumLeadImagePrompt({
+    brief,
+    audience,
+    mediumGoal: goal,
+    imageStyle,
+  });
+  const selectedImage =
+    imageHistory.find((image) => image.id === selectedImageId) ??
+    imageHistory[0] ??
+    null;
+  const activeResult = result
+    ? {
+        ...result,
+        leadImageAlt: selectedImage?.leadImageAlt ?? result.leadImageAlt,
+        leadImageDataUrl:
+          selectedImage?.leadImageDataUrl ?? result.leadImageDataUrl,
+        imagePrompt: selectedImage?.imagePrompt ?? result.imagePrompt,
+        imageStyle: selectedImage?.imageStyle ?? result.imageStyle,
+      }
+    : null;
+
+  useEffect(() => {
+    if (!imagePromptEdited) {
+      setImagePrompt(suggestedImagePrompt);
+    }
+  }, [imagePromptEdited, suggestedImagePrompt]);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -716,6 +865,8 @@ function MediumComposer() {
     const nextAudience = audience.trim();
     const nextGoal = goal;
     const nextTone = tone;
+    const nextImageStyle = imageStyle;
+    const nextImagePrompt = imagePrompt.trim();
     const nextIncludeCode = includeCode;
 
     startTransition(async () => {
@@ -734,6 +885,8 @@ function MediumComposer() {
             tone: nextTone,
             audience: nextAudience,
             mediumGoal: nextGoal,
+            imageStyle: nextImageStyle,
+            imagePrompt: nextImagePrompt,
             includeCode: nextIncludeCode,
           }),
         });
@@ -744,6 +897,8 @@ function MediumComposer() {
 
         if (!response.ok || !("format" in payload) || payload.format !== "medium") {
           setResult(null);
+          setImageHistory([]);
+          setSelectedImageId("");
           setError(
             "error" in payload && typeof payload.error === "string"
               ? payload.error
@@ -753,8 +908,31 @@ function MediumComposer() {
         }
 
         setResult(payload);
+        const nextImageHistory =
+          payload.leadImageDataUrl &&
+          typeof payload.imagePrompt === "string" &&
+          payload.imageStyle
+            ? [
+                createMediumImageVersion({
+                  leadImageAlt: payload.leadImageAlt,
+                  leadImageDataUrl: payload.leadImageDataUrl,
+                  imagePrompt: payload.imagePrompt,
+                  imageStyle: payload.imageStyle,
+                }),
+              ]
+            : [];
+        setImageHistory(nextImageHistory);
+        setSelectedImageId(nextImageHistory[0]?.id ?? "");
+        setImageStyle(payload.imageStyle);
+        setIsRefreshingImage(false);
+
+        if (!imagePromptEdited) {
+          setImagePrompt(payload.imagePrompt);
+        }
       } catch {
         setResult(null);
+        setImageHistory([]);
+        setSelectedImageId("");
         setError("The request failed. Check your connection and try again.");
       }
     });
@@ -772,7 +950,77 @@ function MediumComposer() {
     }
   }
 
-  const previewHtml = result ? buildMediumPreviewHtml(result) : "";
+  async function handleRefreshImage() {
+    if (!result || isRefreshingImage) {
+      return;
+    }
+
+    setError("");
+    setIsRefreshingImage(true);
+
+    try {
+      const response = await fetch("/api/generate-medium-image", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          brief: brief.trim(),
+          audience: audience.trim(),
+          mediumGoal: goal,
+          imageStyle,
+          imagePrompt: imagePrompt.trim(),
+          title: result.title,
+          excerpt: result.excerpt,
+        }),
+      });
+
+      const payload = (await response.json()) as
+        | MediumImageResponse
+        | { error?: string };
+
+      if (
+        !response.ok ||
+        !("leadImageDataUrl" in payload) ||
+        typeof payload.leadImageDataUrl !== "string"
+      ) {
+        setError(
+          "error" in payload && typeof payload.error === "string"
+            ? payload.error
+            : "A new lead image could not be generated. Try again.",
+        );
+        return;
+      }
+
+      const nextImage = createMediumImageVersion(payload);
+      setResult((current) =>
+        current
+          ? {
+              ...current,
+              leadImageAlt: payload.leadImageAlt,
+              leadImageDataUrl: payload.leadImageDataUrl,
+              imagePrompt: payload.imagePrompt,
+              imageStyle: payload.imageStyle,
+            }
+          : current,
+      );
+      setImageHistory((current) => [nextImage, ...current].slice(0, 6));
+      setSelectedImageId(nextImage.id);
+
+      if (!imagePromptEdited) {
+        setImagePrompt(payload.imagePrompt);
+      }
+    } catch {
+      setError("The image refresh failed. Check your connection and try again.");
+    } finally {
+      setIsRefreshingImage(false);
+    }
+  }
+
+  const previewHtml = activeResult ? buildMediumPreviewHtml(activeResult) : "";
+  const currentImageStyleLabel = activeResult
+    ? getMediumImageStyleLabel(activeResult.imageStyle)
+    : getMediumImageStyleLabel(imageStyle);
 
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
@@ -842,7 +1090,7 @@ function MediumComposer() {
               </div>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+            <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <FieldLabel htmlFor="medium-tone">Voice</FieldLabel>
                 <select
@@ -863,7 +1111,63 @@ function MediumComposer() {
                 </select>
               </div>
 
-              <label className="inline-flex items-center gap-3 rounded-[0.95rem] border border-white/12 bg-white/[0.04] px-3.5 py-2.5 text-sm text-white/80">
+              <div className="space-y-2">
+                <FieldLabel htmlFor="medium-image-style">Image type</FieldLabel>
+                <select
+                  id="medium-image-style"
+                  value={imageStyle}
+                  onChange={(event) =>
+                    setImageStyle(event.target.value as MediumImageStyleOption)
+                  }
+                  className="w-full rounded-[0.95rem] border border-white/12 bg-white/[0.06] px-3.5 py-2.5 text-sm text-white outline-none transition focus:border-[#ffb499]"
+                >
+                  {mediumImageStyleOptions.map((option) => (
+                    <option
+                      key={option.value}
+                      value={option.value}
+                      className="bg-[#171717]"
+                    >
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <FieldLabel htmlFor="medium-image-prompt">
+                  Lead image prompt
+                </FieldLabel>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setImagePromptEdited(false);
+                    setImagePrompt(suggestedImagePrompt);
+                  }}
+                  className="text-xs font-medium text-[#ffb499] transition hover:text-[#ffd1bf]"
+                >
+                  Use suggested prompt
+                </button>
+              </div>
+              <textarea
+                id="medium-image-prompt"
+                rows={6}
+                value={imagePrompt}
+                onChange={(event) => {
+                  setImagePromptEdited(true);
+                  setImagePrompt(event.target.value);
+                }}
+                placeholder="Describe the Medium lead image you want."
+                className="w-full resize-y rounded-[1.05rem] border border-white/12 bg-white/[0.06] px-3.5 py-3 text-[9px] leading-4 text-white outline-none transition focus:border-[#ffb499] focus:bg-white/[0.08]"
+              />
+              <p className="text-xs leading-6 text-white/45">
+                This prompt controls the Medium hero image only. Keep it simple,
+                specific, and visual.
+              </p>
+            </div>
+
+            <label className="inline-flex items-center gap-3 rounded-[0.95rem] border border-white/12 bg-white/[0.04] px-3.5 py-2.5 text-sm text-white/80">
                 <input
                   type="checkbox"
                   checked={includeCode}
@@ -871,8 +1175,7 @@ function MediumComposer() {
                   className="h-4 w-4 accent-[#f6b26b]"
                 />
                 Include code if relevant
-              </label>
-            </div>
+            </label>
 
             <button
               type="submit"
@@ -886,7 +1189,9 @@ function MediumComposer() {
       </section>
 
       <section className="space-y-3">
-        {result ? (
+        {isPending ? (
+          <MediumLoadingState />
+        ) : activeResult ? (
           <div className="rounded-[1.6rem] border border-panel-border bg-[#171717] p-3 text-white shadow-[0_24px_80px_rgba(23,23,23,0.14)] sm:p-4">
             <div className="rounded-[1.35rem] border border-white/10 bg-white/[0.04] p-4 sm:p-5">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -895,16 +1200,17 @@ function MediumComposer() {
                     Medium Draft
                   </p>
                   <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.16em] text-white/42">
-                    {result.words} words · rich-text copy enabled
-                    {result.mathEmbeds.length > 0
-                      ? ` · ${result.mathEmbeds.length} math embed${result.mathEmbeds.length > 1 ? "s" : ""}`
+                    {activeResult.words} words · rich-text copy enabled ·{" "}
+                    {currentImageStyleLabel}
+                    {activeResult.mathEmbeds.length > 0
+                      ? ` · ${activeResult.mathEmbeds.length} math embed${activeResult.mathEmbeds.length > 1 ? "s" : ""}`
                       : ""}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
-                  {result.leadImageDataUrl ? (
+                  {activeResult.leadImageDataUrl ? (
                     <a
-                      href={result.leadImageDataUrl}
+                      href={activeResult.leadImageDataUrl}
                       download="medium-lead-image.png"
                       className="inline-flex items-center justify-center rounded-full border border-white/12 bg-white/[0.04] px-3 py-1.5 text-xs text-white/75 transition hover:border-[#ffb499] hover:text-white"
                     >
@@ -914,22 +1220,125 @@ function MediumComposer() {
                   <CopyActionButton
                     copied={copyState === "medium-story"}
                     label="Copy Medium story"
-                    onClick={() => handleCopy(result)}
+                    onClick={() => handleCopy(activeResult)}
                   />
                 </div>
               </div>
 
               <div className="mt-4 rounded-[1rem] border border-white/8 bg-[#f8f2e8] p-5 text-[#171717]">
-                {result.leadImageDataUrl ? (
-                  <div className="mb-5 overflow-hidden rounded-[1rem] border border-[#dbc7af] bg-[#efe2d0]">
-                    <Image
-                      src={result.leadImageDataUrl}
-                      alt={result.leadImageAlt}
-                      width={1536}
-                      height={1024}
-                      unoptimized
-                      className="aspect-[3/2] w-full object-cover"
-                    />
+                {activeResult.leadImageDataUrl ? (
+                  <div className="mb-5">
+                    <div className="relative overflow-hidden rounded-[1rem] border border-[#dbc7af] bg-[#efe2d0]">
+                      <div className="absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-3 p-3">
+                        <span className="rounded-full border border-white/40 bg-[#171717]/65 px-3 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-white">
+                          {currentImageStyleLabel}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleRefreshImage}
+                          disabled={isRefreshingImage}
+                          className="inline-flex items-center gap-2 rounded-full border border-white/35 bg-[#171717]/72 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-[#171717]/86 disabled:cursor-not-allowed disabled:opacity-70"
+                        >
+                          <span
+                            className={
+                              isRefreshingImage ? "animate-spin" : undefined
+                            }
+                          >
+                            <RefreshIcon />
+                          </span>
+                          {isRefreshingImage ? "Refreshing..." : "Refresh image"}
+                        </button>
+                      </div>
+
+                      {isRefreshingImage ? (
+                        <div className="absolute inset-0 z-0 bg-[#171717]/18" />
+                      ) : null}
+
+                      {isRefreshingImage ? (
+                        <div className="absolute inset-0 z-20 flex items-center justify-center">
+                          <div className="rounded-full border border-white/35 bg-[#171717]/75 px-4 py-2 text-xs font-medium text-white shadow-lg">
+                            Generating a new image...
+                          </div>
+                        </div>
+                      ) : null}
+
+                      <Image
+                        src={activeResult.leadImageDataUrl}
+                        alt={activeResult.leadImageAlt}
+                        width={1536}
+                        height={1024}
+                        unoptimized
+                        className={`aspect-[3/2] w-full object-cover transition ${
+                          isRefreshingImage ? "opacity-55" : ""
+                        }`}
+                      />
+                    </div>
+
+                    {imageHistory.length > 1 ? (
+                      <div className="mt-3 space-y-2">
+                        <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-[#7d6653]">
+                          Image takes
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {imageHistory.map((image, index) => {
+                            const active = image.id === selectedImage?.id;
+
+                            return (
+                              <button
+                                key={image.id}
+                                type="button"
+                                onClick={() => setSelectedImageId(image.id)}
+                                className={`overflow-hidden rounded-[0.95rem] border text-left transition ${
+                                  active
+                                    ? "border-[#a54521] ring-2 ring-[#a54521]/18"
+                                    : "border-[#dbc7af] hover:border-[#c78657]"
+                                }`}
+                              >
+                                <div className="relative h-16 w-24 bg-[#efe2d0]">
+                                  <Image
+                                    src={image.leadImageDataUrl}
+                                    alt={image.leadImageAlt}
+                                    fill
+                                    unoptimized
+                                    className="object-cover"
+                                  />
+                                </div>
+                                <div className="bg-[#f4e7d6] px-2 py-1.5">
+                                  <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-[#7d6653]">
+                                    Take {imageHistory.length - index}
+                                  </p>
+                                  <p className="mt-0.5 text-[11px] text-[#4f3b2b]">
+                                    {getMediumImageStyleLabel(image.imageStyle)}
+                                  </p>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : result ? (
+                  <div className="mb-5 rounded-[1rem] border border-dashed border-[#dbc7af] bg-[#efe2d0] p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-[#7d6653]">
+                          Lead image
+                        </p>
+                        <p className="mt-1 text-sm text-[#5f4b3c]">
+                          No image was returned for this draft yet.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleRefreshImage}
+                        disabled={isRefreshingImage}
+                        className="inline-flex items-center gap-2 rounded-full border border-[#c78657] bg-white/70 px-3 py-1.5 text-xs font-medium text-[#7a3316] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        <RefreshIcon />
+                        {isRefreshingImage ? "Generating..." : "Generate image"}
+                      </button>
+                    </div>
                   </div>
                 ) : null}
                 <div
@@ -958,7 +1367,7 @@ function MediumComposer() {
             </div>
           </div>
         ) : (
-          <EmptyState copy="Your Medium story preview will appear here. This side is optimized for one finished draft, not multiple variants." />
+          <MediumIdleState />
         )}
 
         <ErrorMessage error={error} />
