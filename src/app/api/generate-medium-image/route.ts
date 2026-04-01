@@ -1,4 +1,6 @@
-import { NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
+import { logError } from "@/lib/logger";
+import { finalizeJsonResponse } from "@/lib/server-request-logging";
 import {
   DEFAULT_MEDIUM_IMAGE_STYLE,
   isMediumImageStyleOption,
@@ -15,14 +17,23 @@ import {
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
+  const startedAt = performance.now();
+  const requestId = request.headers.get("x-request-id")?.trim() || randomUUID();
   let payload: unknown;
 
   try {
     payload = await request.json();
   } catch {
-    return NextResponse.json(
-      { error: "The request body must be valid JSON." },
+    return finalizeJsonResponse(
+      "api.generate-medium-image",
+      request,
+      startedAt,
+      {
+        error: "The request body must be valid JSON.",
+        requestId,
+      },
       { status: 400 },
+      { requestId },
     );
   }
 
@@ -99,12 +110,17 @@ export async function POST(request: Request) {
       : "";
 
   if (!rawImagePrompt && rawBrief.length < 12) {
-    return NextResponse.json(
+    return finalizeJsonResponse(
+      "api.generate-medium-image",
+      request,
+      startedAt,
       {
         error:
           "Provide either an image prompt or a story seed so the image can be regenerated.",
+        requestId,
       },
       { status: 400 },
+      { requestId },
     );
   }
 
@@ -133,13 +149,37 @@ export async function POST(request: Request) {
       excerpt: rawExcerpt,
     });
 
-    return NextResponse.json(image);
+    return finalizeJsonResponse(
+      "api.generate-medium-image",
+      request,
+      startedAt,
+      {
+        ...image,
+        requestId,
+      },
+      undefined,
+      { requestId, imageStyle, imageModel, imageQuality },
+    );
   } catch (error) {
-    console.error("OpenAI image regeneration failed", error);
+    logError("api.generate-medium-image", "OpenAI image regeneration failed", {
+      requestId,
+      briefLength: rawBrief.length,
+      imageStyle,
+      imageModel,
+      imageQuality,
+      error,
+    });
 
-    return NextResponse.json(
-      { error: "OpenAI could not generate a new lead image right now." },
+    return finalizeJsonResponse(
+      "api.generate-medium-image",
+      request,
+      startedAt,
+      {
+        error: "OpenAI could not generate a new lead image right now.",
+        requestId,
+      },
       { status: 500 },
+      { requestId, imageStyle, imageModel, imageQuality },
     );
   }
 }

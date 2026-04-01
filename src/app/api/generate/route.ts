@@ -1,4 +1,6 @@
-import { NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
+import { logError } from "@/lib/logger";
+import { finalizeJsonResponse } from "@/lib/server-request-logging";
 import {
   buildMediumLeadImagePrompt,
   DEFAULT_MEDIUM_IMAGE_STYLE,
@@ -31,6 +33,7 @@ import {
 } from "@/lib/post-config";
 
 export const runtime = "nodejs";
+const OUTPUT_PREVIEW_LENGTH = 700;
 
 function normalizePost(post: string) {
   const flattened = post.trim().replace(/\s+/g, " ");
@@ -59,6 +62,34 @@ function extractVariants(text: string) {
 
 function normalizeMediumStory(story: string) {
   return story.replace(/\r\n/g, "\n").trim();
+}
+
+function summarizeText(text: string, maxLength = OUTPUT_PREVIEW_LENGTH) {
+  const normalized = text.replace(/\s+/g, " ").trim();
+
+  return normalized.length <= maxLength
+    ? normalized
+    : `${normalized.slice(0, maxLength - 3).trimEnd()}...`;
+}
+
+function summarizeOpenAIResponse(response: {
+  id?: string;
+  error?: unknown;
+  incomplete_details?: unknown;
+  model?: string;
+  output_text?: string;
+  status?: string;
+  usage?: unknown;
+}) {
+  return {
+    id: response.id,
+    model: response.model,
+    status: response.status,
+    incompleteDetails: response.incomplete_details,
+    usage: response.usage,
+    error: response.error,
+    outputPreview: summarizeText(response.output_text ?? ""),
+  };
 }
 
 type MediumMathEmbed = {
@@ -280,14 +311,20 @@ ${tonePrompt}`;
 }
 
 export async function POST(request: Request) {
+  const startedAt = performance.now();
+  const requestId = request.headers.get("x-request-id")?.trim() || randomUUID();
   let payload: unknown;
 
   try {
     payload = await request.json();
   } catch {
-    return NextResponse.json(
-      { error: "The request body must be valid JSON." },
+    return finalizeJsonResponse(
+      "api.generate",
+      request,
+      startedAt,
+      { error: "The request body must be valid JSON.", requestId },
       { status: 400 },
+      { requestId },
     );
   }
 
@@ -396,11 +433,16 @@ export async function POST(request: Request) {
       : DEFAULT_IMAGE_QUALITY;
 
   if (rawBrief.length < 12 || rawBrief.length > MAX_BRIEF_LENGTH) {
-    return NextResponse.json(
+    return finalizeJsonResponse(
+      "api.generate",
+      request,
+      startedAt,
       {
         error: `Briefs must be between 12 and ${MAX_BRIEF_LENGTH} characters.`,
+        requestId,
       },
       { status: 400 },
+      { requestId },
     );
   }
 
@@ -420,6 +462,15 @@ export async function POST(request: Request) {
   const imageQuality = isImageQualityOption(rawImageQuality)
     ? rawImageQuality
     : DEFAULT_IMAGE_QUALITY;
+  const requestContext = {
+    requestId,
+    platform,
+    format,
+    tone,
+    model,
+    reasoningEffort,
+    briefLength: rawBrief.length,
+  };
 
   try {
     const openai = createOpenAIClient();
@@ -455,9 +506,18 @@ export async function POST(request: Request) {
     });
 
     const output = response.output_text.trim();
+    const responseSummary = summarizeOpenAIResponse(response);
 
     if (!output) {
-      return NextResponse.json(
+      logError("api.generate", "OpenAI generation returned empty output", {
+        ...requestContext,
+        response: responseSummary,
+      });
+
+      return finalizeJsonResponse(
+        "api.generate",
+        request,
+        startedAt,
         {
           error:
             platform === "medium"
@@ -465,8 +525,10 @@ export async function POST(request: Request) {
               : format === "thread"
                 ? "The model returned an empty thread."
                 : "The model returned an empty post.",
+          requestId,
         },
         { status: 502 },
+        requestContext,
       );
     }
 
@@ -519,79 +581,147 @@ export async function POST(request: Request) {
         leadImageDataUrl = image.leadImageDataUrl;
         imagePrompt = image.imagePrompt;
       } catch (imageError) {
-        console.error("OpenAI image generation failed", imageError);
+        logError("api.generate", "OpenAI image generation failed", {
+          ...requestContext,
+          platform,
+          imageStyle,
+          imageModel,
+          imageQuality,
+          error: imageError,
+        });
       }
 
-      return NextResponse.json({
-        format: "medium",
-        title,
-        excerpt,
-        markdown: extractedMath.markdown,
-        words: extractedMath.markdown.split(/\s+/).filter(Boolean).length,
-        leadImageAlt,
-        leadImageDataUrl,
-        imagePrompt,
-        imageStyle,
-        model,
-        reasoningEffort,
-        imageModel,
-        imageQuality,
-        mathEmbeds,
-      });
+      return finalizeJsonResponse(
+        "api.generate",
+        request,
+        startedAt,
+        {
+          format: "medium",
+          title,
+          excerpt,
+          markdown: extractedMath.markdown,
+          words: extractedMath.markdown.split(/\s+/).filter(Boolean).length,
+          leadImageAlt,
+          leadImageDataUrl,
+          imagePrompt,
+          imageStyle,
+          model,
+          reasoningEffort,
+          imageModel,
+          imageQuality,
+          mathEmbeds,
+        },
+        undefined,
+        requestContext,
+      );
     }
 
     const variants = extractVariants(output);
 
     if (variants.length < VARIANT_COUNT) {
-      return NextResponse.json(
-        { error: `The model did not return ${VARIANT_COUNT} usable variants.` },
+      logError("api.generate", "OpenAI variant parsing failed", {
+        ...requestContext,
+        parsedVariants: variants.length,
+        expectedVariants: VARIANT_COUNT,
+        response: responseSummary,
+      });
+
+      return finalizeJsonResponse(
+        "api.generate",
+        request,
+        startedAt,
+        {
+          error: `Expected ${VARIANT_COUNT} variants, but parsed ${variants.length}. Request ID: ${requestId}.`,
+          requestId,
+        },
         { status: 502 },
+        requestContext,
       );
     }
 
     if (format === "thread") {
-      const threadVariants = variants
-        .map((variant) => extractThread(variant))
+      const parsedThreadVariants = variants.map((variant) => extractThread(variant));
+      const threadVariants = parsedThreadVariants
         .filter((posts) => posts.length >= 2)
         .slice(0, VARIANT_COUNT);
 
       if (threadVariants.length < VARIANT_COUNT) {
-        return NextResponse.json(
+        const postCounts = parsedThreadVariants.map((posts) => posts.length);
+
+        logError("api.generate", "OpenAI thread parsing failed", {
+          ...requestContext,
+          parsedVariants: variants.length,
+          usableThreadVariants: threadVariants.length,
+          expectedVariants: VARIANT_COUNT,
+          postCounts,
+          response: responseSummary,
+        });
+
+        return finalizeJsonResponse(
+          "api.generate",
+          request,
+          startedAt,
           {
-            error: `The model did not return ${VARIANT_COUNT} usable thread variants.`,
+            error: `Expected ${VARIANT_COUNT} thread variants with at least 2 posts each, but parsed post counts [${postCounts.join(", ")}]. Request ID: ${requestId}.`,
+            requestId,
           },
           { status: 502 },
+          requestContext,
         );
       }
 
-      return NextResponse.json({
-        format: "thread",
-        variants: threadVariants.map((posts) => ({
-          posts: posts.map((text) => ({
-            text,
-            characters: text.length,
+      return finalizeJsonResponse(
+        "api.generate",
+        request,
+        startedAt,
+        {
+          format: "thread",
+          variants: threadVariants.map((posts) => ({
+            posts: posts.map((text) => ({
+              text,
+              characters: text.length,
+            })),
           })),
-        })),
-      });
+        },
+        undefined,
+        requestContext,
+      );
     }
 
-    return NextResponse.json({
-      format: "post",
-      variants: variants.map((variant) => {
-        const post = normalizePost(variant);
+    return finalizeJsonResponse(
+      "api.generate",
+      request,
+      startedAt,
+      {
+        format: "post",
+        variants: variants.map((variant) => {
+          const post = normalizePost(variant);
 
-        return {
-          post,
-          characters: post.length,
-        };
-      }),
-    });
+          return {
+            post,
+            characters: post.length,
+          };
+        }),
+      },
+      undefined,
+      requestContext,
+    );
   } catch (error) {
-    console.error("OpenAI generation failed", error);
+    logError("api.generate", "OpenAI generation failed", {
+      ...requestContext,
+      error,
+    });
 
-    return NextResponse.json(
-      { error: "OpenAI could not generate a post right now." },
+    return finalizeJsonResponse(
+      "api.generate",
+      request,
+      startedAt,
+      {
+        error: `OpenAI could not generate a post right now. Request ID: ${requestId}.`,
+        requestId,
+      },
       { status: 500 },
+      requestContext,
     );
   }
 }

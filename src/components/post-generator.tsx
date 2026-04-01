@@ -55,6 +55,7 @@ import {
   type ShortDurationOption,
   type ShortTargetOption,
 } from "@/lib/short-config";
+import { logError } from "@/lib/logger";
 
 type PostVariant = {
   post: string;
@@ -111,6 +112,7 @@ type MediumImageResponse = {
   imageStyle: MediumImageStyleOption;
   imageModel: ImageModelOption;
   imageQuality: ImageQualityOption;
+  requestId?: string;
 };
 
 type MediumImageVersion = MediumImageResponse & {
@@ -144,6 +146,7 @@ type ShortJob = {
   targetLabel: string;
   estimatedCostUsd: number;
   errorMessage: string | null;
+  requestId?: string;
 };
 
 type ShortResult = ShortJob & {
@@ -155,6 +158,10 @@ type GenerateResponse = XResponse | MediumResult;
 type ShortCreateResponse = ShortResult;
 type ShortStatusResponse = ShortJob;
 type ComposerTab = PlatformOption | "shorts";
+type ErrorResponse = {
+  error?: string;
+  requestId?: string;
+};
 
 type CopyActionButtonProps = {
   copied: boolean;
@@ -178,6 +185,29 @@ const usdFormatter = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
+
+async function readResponsePayload<T>(response: Response) {
+  const contentType = response.headers.get("content-type") ?? "";
+
+  if (contentType.includes("application/json")) {
+    return (await response.json()) as T | ErrorResponse;
+  }
+
+  const text = (await response.text()).trim();
+
+  return text ? ({ error: text } as ErrorResponse) : ({} as ErrorResponse);
+}
+
+function readErrorMessage(
+  payload: GenerateResponse | ErrorResponse,
+  fallback: string,
+) {
+  if ("error" in payload && typeof payload.error === "string" && payload.error) {
+    return payload.error;
+  }
+
+  return fallback;
+}
 
 function CopyIcon() {
   return (
@@ -623,26 +653,32 @@ function XComposer() {
           }),
         });
 
-        const payload = (await response.json()) as
-          | GenerateResponse
-          | { error?: string };
+        const payload = await readResponsePayload<GenerateResponse>(response);
 
         if (
           !response.ok ||
           !("format" in payload) ||
           (payload.format !== "post" && payload.format !== "thread")
         ) {
+          logError("client.x-composer", "X generation failed", {
+            status: response.status,
+            format: nextFormat,
+            tone: nextTone,
+            requestId: "requestId" in payload ? payload.requestId : undefined,
+            payload,
+          });
           setResult(null);
-          setError(
-            "error" in payload && typeof payload.error === "string"
-              ? payload.error
-              : "The X draft could not be generated. Try again.",
-          );
+          setError(readErrorMessage(payload, "The X draft could not be generated. Try again."));
           return;
         }
 
         setResult(payload);
-      } catch {
+      } catch (error) {
+        logError("client.x-composer", "X generation request failed", {
+          format: nextFormat,
+          tone: nextTone,
+          error,
+        });
         setResult(null);
         setError("The request failed. Check your connection and try again.");
       }
@@ -973,19 +1009,20 @@ function MediumComposer() {
           }),
         });
 
-        const payload = (await response.json()) as
-          | GenerateResponse
-          | { error?: string };
+        const payload = await readResponsePayload<GenerateResponse>(response);
 
         if (!response.ok || !("format" in payload) || payload.format !== "medium") {
+          logError("client.medium-composer", "Medium generation failed", {
+            status: response.status,
+            model: nextModel,
+            reasoningEffort: nextReasoningEffort,
+            requestId: "requestId" in payload ? payload.requestId : undefined,
+            payload,
+          });
           setResult(null);
           setImageHistory([]);
           setSelectedImageId("");
-          setError(
-            "error" in payload && typeof payload.error === "string"
-              ? payload.error
-              : "The Medium story could not be generated. Try again.",
-          );
+          setError(readErrorMessage(payload, "The Medium story could not be generated. Try again."));
           return;
         }
 
@@ -1017,7 +1054,12 @@ function MediumComposer() {
         if (!imagePromptEdited) {
           setImagePrompt(payload.imagePrompt);
         }
-      } catch {
+      } catch (error) {
+        logError("client.medium-composer", "Medium generation request failed", {
+          model: nextModel,
+          reasoningEffort: nextReasoningEffort,
+          error,
+        });
         setResult(null);
         setImageHistory([]);
         setSelectedImageId("");
@@ -1065,15 +1107,18 @@ function MediumComposer() {
         }),
       });
 
-      const payload = (await response.json()) as
-        | MediumImageResponse
-        | { error?: string };
+      const payload = await readResponsePayload<MediumImageResponse>(response);
 
       if (
         !response.ok ||
         !("leadImageDataUrl" in payload) ||
         typeof payload.leadImageDataUrl !== "string"
       ) {
+        logError("client.medium-composer", "Lead image regeneration failed", {
+          status: response.status,
+          requestId: "requestId" in payload ? payload.requestId : undefined,
+          payload,
+        });
         setError(
           "error" in payload && typeof payload.error === "string"
             ? payload.error
@@ -1102,7 +1147,14 @@ function MediumComposer() {
       if (!imagePromptEdited) {
         setImagePrompt(payload.imagePrompt);
       }
-    } catch {
+    } catch (error) {
+      logError("client.medium-composer", "Lead image regeneration request failed", {
+        resultTitle: result.title,
+        imageStyle,
+        imageModel,
+        imageQuality,
+        error,
+      });
       setError("The image refresh failed. Check your connection and try again.");
     } finally {
       setIsRefreshingImage(false);
@@ -1414,13 +1466,44 @@ function MediumComposer() {
                 Include code if relevant
             </label>
 
-            <button
-              type="submit"
-              disabled={isPending || brief.trim().length < 12}
-              className="inline-flex w-full items-center justify-center rounded-full bg-[#f6b26b] px-5 py-2.5 text-sm font-medium text-[#171717] transition hover:bg-[#ffc58f] disabled:cursor-not-allowed disabled:bg-[#c79d6b]"
-            >
-              {isPending ? "Writing..." : "Generate Medium story"}
-            </button>
+            <div className="space-y-2">
+              {result ? (
+                <button
+                  type="button"
+                  onClick={handleRefreshImage}
+                  disabled={
+                    isPending ||
+                    isRefreshingImage ||
+                    brief.trim().length < 12
+                  }
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-white/12 bg-white/[0.04] px-5 py-2.5 text-sm font-medium text-white transition hover:border-[#ffb499] hover:text-[#fff3ec] disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  <span
+                    className={isRefreshingImage ? "animate-spin" : undefined}
+                  >
+                    <RefreshIcon />
+                  </span>
+                  {isRefreshingImage
+                    ? "Refreshing image..."
+                    : "Refresh lead image"}
+                </button>
+              ) : null}
+
+              <button
+                type="submit"
+                disabled={isPending || brief.trim().length < 12}
+                className="inline-flex w-full items-center justify-center rounded-full bg-[#f6b26b] px-5 py-2.5 text-sm font-medium text-[#171717] transition hover:bg-[#ffc58f] disabled:cursor-not-allowed disabled:bg-[#c79d6b]"
+              >
+                {isPending ? "Writing..." : "Generate Medium story"}
+              </button>
+
+              {result ? (
+                <p className="text-xs leading-6 text-white/45">
+                  Update the image model, quality, type, or prompt above, then
+                  refresh the lead image without regenerating the full story.
+                </p>
+              ) : null}
+            </div>
           </form>
         </div>
       </section>
@@ -1470,21 +1553,6 @@ function MediumComposer() {
                         <span className="rounded-full border border-white/40 bg-[#171717]/65 px-3 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-white">
                           {currentImageStyleLabel}
                         </span>
-                        <button
-                          type="button"
-                          onClick={handleRefreshImage}
-                          disabled={isRefreshingImage}
-                          className="inline-flex items-center gap-2 rounded-full border border-white/35 bg-[#171717]/72 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-[#171717]/86 disabled:cursor-not-allowed disabled:opacity-70"
-                        >
-                          <span
-                            className={
-                              isRefreshingImage ? "animate-spin" : undefined
-                            }
-                          >
-                            <RefreshIcon />
-                          </span>
-                          {isRefreshingImage ? "Refreshing..." : "Refresh image"}
-                        </button>
                       </div>
 
                       {isRefreshingImage ? (
@@ -1642,11 +1710,16 @@ function ShortComposer() {
         { cache: "no-store" },
       );
 
-      const payload = (await response.json()) as
-        | ShortStatusResponse
-        | { error?: string };
+      const payload = await readResponsePayload<ShortStatusResponse>(response);
 
       if (!response.ok || !("format" in payload) || payload.format !== "short") {
+        logError("client.short-composer", "Short status refresh failed", {
+          status: response.status,
+          jobId,
+          target: nextTarget,
+          requestId: "requestId" in payload ? payload.requestId : undefined,
+          payload,
+        });
         setError(
           "error" in payload && typeof payload.error === "string"
             ? payload.error
@@ -1660,7 +1733,12 @@ function ShortComposer() {
       );
 
       setError(payload.errorMessage ?? "");
-    } catch {
+    } catch (error) {
+      logError("client.short-composer", "Short status refresh request failed", {
+        jobId,
+        target: nextTarget,
+        error,
+      });
       setError("The short status could not be refreshed. Retrying automatically.");
     }
   }
@@ -1717,11 +1795,17 @@ function ShortComposer() {
           }),
         });
 
-        const payload = (await response.json()) as
-          | ShortCreateResponse
-          | { error?: string };
+        const payload = await readResponsePayload<ShortCreateResponse>(response);
 
         if (!response.ok || !("format" in payload) || payload.format !== "short") {
+          logError("client.short-composer", "Short generation failed", {
+            status: response.status,
+            target: nextTarget,
+            duration: nextDuration,
+            tone: nextTone,
+            requestId: "requestId" in payload ? payload.requestId : undefined,
+            payload,
+          });
           setError(
             "error" in payload && typeof payload.error === "string"
               ? payload.error
@@ -1732,7 +1816,13 @@ function ShortComposer() {
 
         setResult(payload);
         setError(payload.errorMessage ?? "");
-      } catch {
+      } catch (error) {
+        logError("client.short-composer", "Short generation request failed", {
+          target: nextTarget,
+          duration: nextDuration,
+          tone: nextTone,
+          error,
+        });
         setError("The request failed. Check your connection and try again.");
       }
     });

@@ -1,4 +1,9 @@
-import { NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
+import { logError } from "@/lib/logger";
+import {
+  finalizeJsonResponse,
+  finalizeResponse,
+} from "@/lib/server-request-logging";
 import { createOpenAIClient } from "@/lib/openai-server";
 
 export const runtime = "nodejs";
@@ -12,14 +17,23 @@ function getErrorMessage(error: unknown, fallback: string) {
 }
 
 export async function GET(request: Request) {
+  const startedAt = performance.now();
+  const requestId = request.headers.get("x-request-id")?.trim() || randomUUID();
   const { searchParams } = new URL(request.url);
   const jobId = searchParams.get("jobId")?.trim();
   const shouldDownload = searchParams.get("download") === "1";
 
   if (!jobId) {
-    return NextResponse.json(
-      { error: "A short jobId query parameter is required." },
+    return finalizeJsonResponse(
+      "api.generate-short.download",
+      request,
+      startedAt,
+      {
+        error: "A short jobId query parameter is required.",
+        requestId,
+      },
       { status: 400 },
+      { requestId },
     );
   }
 
@@ -28,12 +42,17 @@ export async function GET(request: Request) {
     const videoResponse = await openai.videos.downloadContent(jobId);
 
     if (!videoResponse.ok || !videoResponse.body) {
-      return NextResponse.json(
+      return finalizeJsonResponse(
+        "api.generate-short.download",
+        request,
+        startedAt,
         {
           error:
             "The short video is not ready to download yet. Wait for completion and try again.",
+          requestId,
         },
         { status: 409 },
+        { requestId, jobId, shouldDownload },
       );
     }
 
@@ -51,12 +70,23 @@ export async function GET(request: Request) {
       );
     }
 
-    return new Response(videoResponse.body, {
-      status: 200,
-      headers,
-    });
+    return finalizeResponse(
+      "api.generate-short.download",
+      request,
+      startedAt,
+      new Response(videoResponse.body, {
+        status: 200,
+        headers,
+      }),
+      { requestId, jobId, shouldDownload },
+    );
   } catch (error) {
-    console.error("OpenAI short download failed", error);
+    logError("api.generate-short.download", "OpenAI short download failed", {
+      requestId,
+      jobId,
+      shouldDownload,
+      error,
+    });
 
     const message = getErrorMessage(
       error,
@@ -64,12 +94,23 @@ export async function GET(request: Request) {
     );
 
     if (message.includes("not ready yet")) {
-      return NextResponse.json({ error: message }, { status: 409 });
+      return finalizeJsonResponse(
+        "api.generate-short.download",
+        request,
+        startedAt,
+        { error: message, requestId },
+        { status: 409 },
+        { requestId, jobId, shouldDownload },
+      );
     }
 
-    return NextResponse.json(
-      { error: message },
+    return finalizeJsonResponse(
+      "api.generate-short.download",
+      request,
+      startedAt,
+      { error: message, requestId },
       { status: 500 },
+      { requestId, jobId, shouldDownload },
     );
   }
 }

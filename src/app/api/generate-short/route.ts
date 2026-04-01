@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import type OpenAI from "openai";
-import { NextResponse } from "next/server";
+import { logError, logWarn } from "@/lib/logger";
+import { finalizeJsonResponse } from "@/lib/server-request-logging";
 import { createOpenAIClient } from "@/lib/openai-server";
 import {
   DEFAULT_MODEL,
@@ -227,14 +229,23 @@ function getErrorMessage(error: unknown, fallback: string) {
 }
 
 export async function POST(request: Request) {
+  const startedAt = performance.now();
+  const requestId = request.headers.get("x-request-id")?.trim() || randomUUID();
   let payload: unknown;
 
   try {
     payload = await request.json();
   } catch {
-    return NextResponse.json(
-      { error: "The request body must be valid JSON." },
+    return finalizeJsonResponse(
+      "api.generate-short",
+      request,
+      startedAt,
+      {
+        error: "The request body must be valid JSON.",
+        requestId,
+      },
       { status: 400 },
+      { requestId },
     );
   }
 
@@ -271,11 +282,16 @@ export async function POST(request: Request) {
       : DEFAULT_SHORT_DURATION;
 
   if (rawBrief.length < 12 || rawBrief.length > MAX_BRIEF_LENGTH) {
-    return NextResponse.json(
+    return finalizeJsonResponse(
+      "api.generate-short",
+      request,
+      startedAt,
       {
         error: `Briefs must be between 12 and ${MAX_BRIEF_LENGTH} characters.`,
+        requestId,
       },
       { status: 400 },
+      { requestId },
     );
   }
 
@@ -327,11 +343,25 @@ export async function POST(request: Request) {
     const plan = parseShortPack(planResponse.output_text, rawBrief);
 
     if (!plan) {
-      return NextResponse.json(
+      logWarn("api.generate-short", "OpenAI short plan parsing failed", {
+        requestId,
+        model,
+        target,
+        duration,
+        briefLength: rawBrief.length,
+        outputPreview: planResponse.output_text.slice(0, 700),
+      });
+
+      return finalizeJsonResponse(
+        "api.generate-short",
+        request,
+        startedAt,
         {
           error: "The model did not return a usable short-generation plan.",
+          requestId,
         },
         { status: 502 },
+        { requestId, model, target, duration, tone },
       );
     }
 
@@ -342,26 +372,48 @@ export async function POST(request: Request) {
       size: DEFAULT_SHORT_SIZE,
     });
 
-    return NextResponse.json({
-      ...serializeVideoStatus(video, target),
-      pack: plan,
-    });
+    return finalizeJsonResponse(
+      "api.generate-short",
+      request,
+      startedAt,
+      {
+        ...serializeVideoStatus(video, target),
+        requestId,
+        pack: plan,
+      },
+      undefined,
+      { requestId, model, target, duration, tone },
+    );
   } catch (error) {
-    console.error("OpenAI short generation failed", error);
+    logError("api.generate-short", "OpenAI short generation failed", {
+      requestId,
+      target,
+      duration,
+      tone,
+      briefLength: rawBrief.length,
+      error,
+    });
 
-    return NextResponse.json(
+    return finalizeJsonResponse(
+      "api.generate-short",
+      request,
+      startedAt,
       {
         error: getErrorMessage(
           error,
           "OpenAI could not generate a short right now.",
         ),
+        requestId,
       },
       { status: 500 },
+      { requestId, target, duration, tone },
     );
   }
 }
 
 export async function GET(request: Request) {
+  const startedAt = performance.now();
+  const requestId = request.headers.get("x-request-id")?.trim() || randomUUID();
   const { searchParams } = new URL(request.url);
   const jobId = searchParams.get("jobId")?.trim();
   const rawTarget = searchParams.get("target")?.trim() ?? DEFAULT_SHORT_TARGET;
@@ -370,9 +422,16 @@ export async function GET(request: Request) {
     : DEFAULT_SHORT_TARGET;
 
   if (!jobId) {
-    return NextResponse.json(
-      { error: "A short jobId query parameter is required." },
+    return finalizeJsonResponse(
+      "api.generate-short",
+      request,
+      startedAt,
+      {
+        error: "A short jobId query parameter is required.",
+        requestId,
+      },
       { status: 400 },
+      { requestId },
     );
   }
 
@@ -380,18 +439,38 @@ export async function GET(request: Request) {
     const openai = createOpenAIClient();
     const video = await openai.videos.retrieve(jobId);
 
-    return NextResponse.json(serializeVideoStatus(video, target));
+    return finalizeJsonResponse(
+      "api.generate-short",
+      request,
+      startedAt,
+      {
+        ...serializeVideoStatus(video, target),
+        requestId,
+      },
+      undefined,
+      { requestId, jobId, target },
+    );
   } catch (error) {
-    console.error("OpenAI short status check failed", error);
+    logError("api.generate-short", "OpenAI short status check failed", {
+      requestId,
+      jobId,
+      target,
+      error,
+    });
 
-    return NextResponse.json(
+    return finalizeJsonResponse(
+      "api.generate-short",
+      request,
+      startedAt,
       {
         error: getErrorMessage(
           error,
           "The short status could not be retrieved right now.",
         ),
+        requestId,
       },
       { status: 500 },
+      { requestId, jobId, target },
     );
   }
 }
