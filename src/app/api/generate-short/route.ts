@@ -5,6 +5,7 @@ import { finalizeJsonResponse } from "@/lib/server-request-logging";
 import { createOpenAIClient } from "@/lib/openai-server";
 import {
   DEFAULT_MODEL,
+  DEFAULT_REASONING_EFFORT,
   DEFAULT_TONE,
   MAX_BRIEF_LENGTH,
   getTonePrompt,
@@ -311,7 +312,7 @@ export async function POST(request: Request) {
       model,
       max_output_tokens: 900,
       ...(model.startsWith("gpt-5")
-        ? { reasoning: { effort: "minimal" as const } }
+        ? { reasoning: { effort: DEFAULT_REASONING_EFFORT } }
         : {}),
       input: [
         {
