@@ -1,5 +1,5 @@
-import OpenAI from "openai";
 import { NextResponse } from "next/server";
+import { createOpenAIClient } from "@/lib/openai-server";
 
 export const runtime = "nodejs";
 
@@ -12,15 +12,6 @@ function getErrorMessage(error: unknown, fallback: string) {
 }
 
 export async function GET(request: Request) {
-  const apiKey = process.env.OPENAI_API_KEY;
-
-  if (!apiKey) {
-    return NextResponse.json(
-      { error: "OPENAI_API_KEY is missing on the server." },
-      { status: 500 },
-    );
-  }
-
   const { searchParams } = new URL(request.url);
   const jobId = searchParams.get("jobId")?.trim();
   const shouldDownload = searchParams.get("download") === "1";
@@ -33,7 +24,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const openai = new OpenAI({ apiKey });
+    const openai = createOpenAIClient();
     const videoResponse = await openai.videos.downloadContent(jobId);
 
     if (!videoResponse.ok || !videoResponse.body) {

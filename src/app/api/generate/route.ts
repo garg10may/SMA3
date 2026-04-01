@@ -1,4 +1,3 @@
-import OpenAI from "openai";
 import { NextResponse } from "next/server";
 import {
   buildMediumLeadImagePrompt,
@@ -6,6 +5,7 @@ import {
   isMediumImageStyleOption,
 } from "@/lib/medium-image";
 import { generateMediumLeadImage } from "@/lib/medium-image-server";
+import { createOpenAIClient } from "@/lib/openai-server";
 import {
   DEFAULT_FORMAT,
   DEFAULT_IMAGE_MODEL,
@@ -280,15 +280,6 @@ ${tonePrompt}`;
 }
 
 export async function POST(request: Request) {
-  const apiKey = process.env.OPENAI_API_KEY;
-
-  if (!apiKey) {
-    return NextResponse.json(
-      { error: "OPENAI_API_KEY is missing on the server." },
-      { status: 500 },
-    );
-  }
-
   let payload: unknown;
 
   try {
@@ -431,7 +422,7 @@ export async function POST(request: Request) {
     : DEFAULT_IMAGE_QUALITY;
 
   try {
-    const openai = new OpenAI({ apiKey });
+    const openai = createOpenAIClient();
 
     const response = await openai.responses.create({
       model,

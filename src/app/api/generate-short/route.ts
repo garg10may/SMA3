@@ -1,5 +1,6 @@
-import OpenAI from "openai";
+import type OpenAI from "openai";
 import { NextResponse } from "next/server";
+import { createOpenAIClient } from "@/lib/openai-server";
 import {
   DEFAULT_MODEL,
   DEFAULT_TONE,
@@ -226,15 +227,6 @@ function getErrorMessage(error: unknown, fallback: string) {
 }
 
 export async function POST(request: Request) {
-  const apiKey = process.env.OPENAI_API_KEY;
-
-  if (!apiKey) {
-    return NextResponse.json(
-      { error: "OPENAI_API_KEY is missing on the server." },
-      { status: 500 },
-    );
-  }
-
   let payload: unknown;
 
   try {
@@ -296,7 +288,7 @@ export async function POST(request: Request) {
     : DEFAULT_SHORT_DURATION;
 
   try {
-    const openai = new OpenAI({ apiKey });
+    const openai = createOpenAIClient();
     const model = process.env.OPENAI_MODEL ?? DEFAULT_MODEL;
 
     const planResponse = await openai.responses.create({
@@ -370,15 +362,6 @@ export async function POST(request: Request) {
 }
 
 export async function GET(request: Request) {
-  const apiKey = process.env.OPENAI_API_KEY;
-
-  if (!apiKey) {
-    return NextResponse.json(
-      { error: "OPENAI_API_KEY is missing on the server." },
-      { status: 500 },
-    );
-  }
-
   const { searchParams } = new URL(request.url);
   const jobId = searchParams.get("jobId")?.trim();
   const rawTarget = searchParams.get("target")?.trim() ?? DEFAULT_SHORT_TARGET;
@@ -394,7 +377,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const openai = new OpenAI({ apiKey });
+    const openai = createOpenAIClient();
     const video = await openai.videos.retrieve(jobId);
 
     return NextResponse.json(serializeVideoStatus(video, target));
