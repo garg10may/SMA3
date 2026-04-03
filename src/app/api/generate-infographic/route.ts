@@ -1,19 +1,20 @@
 import { randomUUID } from "node:crypto";
 import {
-  buildFallbackInfographicBlueprint,
-  buildInfographicBlueprintPrompt,
+  buildFallbackInfographicPlan,
+  buildInfographicDefaultPlanStyle,
+  buildInfographicPlanPrompt,
   DEFAULT_INFOGRAPHIC_VISUAL_STYLE,
   isInfographicVisualStyleOption,
-  type InfographicBlueprint,
+  normalizeInfographicIcon,
+  type InfographicPlan,
 } from "@/lib/infographic";
 import {
-  buildInfographicSvgDataUrl,
-  buildInfographicSvgMarkup,
-} from "@/lib/infographic-render";
+  buildInfographicSceneSource,
+} from "@/lib/infographic-manim";
 import { logError, logWarn } from "@/lib/logger";
+import { renderManimScene } from "@/lib/manim-server";
 import { createOpenAIClient } from "@/lib/openai-server";
 import {
-  DEFAULT_MODEL,
   DEFAULT_REASONING_EFFORT,
   MAX_BRIEF_LENGTH,
   isReasoningEffortOption,
@@ -23,59 +24,143 @@ import { finalizeJsonResponse } from "@/lib/server-request-logging";
 
 export const runtime = "nodejs";
 
-type ParsedBlueprintPanel = {
+const DEFAULT_INFOGRAPHIC_MODEL = "gpt-5.4";
+
+type ParsedPlanBlock = {
+  id?: unknown;
   title?: unknown;
-  detail?: unknown;
-  accent?: unknown;
+  body?: unknown;
+  role?: unknown;
+  icon?: unknown;
+  emphasis?: unknown;
 };
 
-type RawBlueprint = {
+type ParsedPlanConnection = {
+  fromId?: unknown;
+  toId?: unknown;
+  label?: unknown;
+  style?: unknown;
+};
+
+type ParsedPlanCallout = {
+  title?: unknown;
+  body?: unknown;
+  anchorId?: unknown;
+  placement?: unknown;
+  icon?: unknown;
+};
+
+type RawPlan = {
   headline?: unknown;
   subhead?: unknown;
-  layout?: unknown;
+  visualStyle?: unknown;
+  layoutSummary?: unknown;
   narrative?: unknown;
   palette?: unknown;
-  panels?: ParsedBlueprintPanel[];
+  footer?: unknown;
+  blocks?: ParsedPlanBlock[];
+  connections?: ParsedPlanConnection[];
+  callouts?: ParsedPlanCallout[];
   visualHooks?: unknown[];
+  animationBeats?: unknown[];
 };
 
-const infographicBlueprintSchema = {
+const infographicPlanSchema = {
   type: "object",
   additionalProperties: false,
   required: [
     "headline",
     "subhead",
-    "layout",
+    "visualStyle",
+    "layoutSummary",
     "narrative",
     "palette",
-    "panels",
+    "footer",
+    "blocks",
+    "connections",
+    "callouts",
     "visualHooks",
+    "animationBeats",
   ],
   properties: {
     headline: { type: "string" },
     subhead: { type: "string" },
-    layout: { type: "string" },
+    visualStyle: {
+      type: "string",
+      enum: [
+        "architecture-board",
+        "flow-map",
+        "feedback-loop",
+        "comparison-grid",
+      ],
+    },
+    layoutSummary: { type: "string" },
     narrative: { type: "string" },
     palette: { type: "string" },
-    panels: {
+    footer: { type: "string" },
+    blocks: {
       type: "array",
-      minItems: 4,
-      maxItems: 4,
+      minItems: 3,
+      maxItems: 8,
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["title", "detail", "accent"],
+        required: ["id", "title", "body", "role", "icon", "emphasis"],
+        properties: {
+          id: { type: "string" },
+          title: { type: "string" },
+          body: { type: "string" },
+          role: { type: "string" },
+          icon: { type: "string" },
+          emphasis: { type: "string" },
+        },
+      },
+    },
+    connections: {
+      type: "array",
+      minItems: 2,
+      maxItems: 12,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["fromId", "toId", "label", "style"],
+        properties: {
+          fromId: { type: "string" },
+          toId: { type: "string" },
+          label: { type: "string" },
+          style: { type: "string", enum: ["solid", "dashed", "loop"] },
+        },
+      },
+    },
+    callouts: {
+      type: "array",
+      maxItems: 3,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["title", "body", "anchorId", "placement", "icon"],
         properties: {
           title: { type: "string" },
-          detail: { type: "string" },
-          accent: { type: "string" },
+          body: { type: "string" },
+          anchorId: { type: "string" },
+          placement: {
+            type: "string",
+            enum: ["left", "right", "top", "bottom"],
+          },
+          icon: { type: "string" },
         },
       },
     },
     visualHooks: {
       type: "array",
       minItems: 4,
-      maxItems: 6,
+      maxItems: 8,
+      items: { type: "string" },
+    },
+    animationBeats: {
+      type: "array",
+      minItems: 3,
+      maxItems: 8,
       items: { type: "string" },
     },
   },
@@ -110,56 +195,46 @@ function clampCopy(value: string, maxWords: number, maxChars: number) {
   return truncated ? `${nextValue}...` : nextValue;
 }
 
-function normalizeInfographicBlueprint(
-  parsed: RawBlueprint | null,
-  fallback: InfographicBlueprint,
-) {
-  const parsedPanels = Array.isArray(parsed?.panels) ? parsed.panels : [];
-  const panels = fallback.panels.map((panel, index) => {
-    const nextPanel = parsedPanels[index];
-
-    return {
-      title:
-        clampCopy(sanitizeString(nextPanel?.title), 3, 26) ||
-        fallback.panels[index].title,
-      detail:
-        clampCopy(sanitizeString(nextPanel?.detail), 14, 88) ||
-        fallback.panels[index].detail,
-      accent:
-        clampCopy(sanitizeString(nextPanel?.accent), 4, 28) ||
-        fallback.panels[index].accent,
-    };
-  });
-
-  const visualHooks = [
-    ...(Array.isArray(parsed?.visualHooks)
-      ? parsed.visualHooks
-          .map((hook) => clampCopy(sanitizeString(hook), 6, 40))
-          .filter(Boolean)
-      : []),
-    ...fallback.visualHooks,
-  ].slice(0, 6);
-
-  const blueprint = {
-    headline:
-      clampCopy(sanitizeString(parsed?.headline), 5, 30) || fallback.headline,
-    subhead:
-      clampCopy(sanitizeString(parsed?.subhead), 12, 82) || fallback.subhead,
-    layout:
-      clampCopy(sanitizeString(parsed?.layout), 24, 138) || fallback.layout,
-    narrative:
-      clampCopy(sanitizeString(parsed?.narrative), 24, 138) ||
-      fallback.narrative,
-    palette:
-      clampCopy(sanitizeString(parsed?.palette), 8, 48) || fallback.palette,
-    panels,
-    visualHooks,
-  };
-
-  return blueprint;
+function slugifyId(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 24);
 }
 
-function parseInfographicBlueprint(raw: string): RawBlueprint | null {
+function ensureUniqueId(seed: string, fallback: string, used: Set<string>) {
+  const base = slugifyId(seed) || slugifyId(fallback) || "block";
+  let nextId = base;
+  let counter = 2;
+
+  while (used.has(nextId)) {
+    nextId = `${base}-${counter}`;
+    counter += 1;
+  }
+
+  used.add(nextId);
+
+  return nextId;
+}
+
+function isConnectionStyle(value: string): value is "solid" | "dashed" | "loop" {
+  return value === "solid" || value === "dashed" || value === "loop";
+}
+
+function isCalloutPlacement(
+  value: string,
+): value is "left" | "right" | "top" | "bottom" {
+  return (
+    value === "left" ||
+    value === "right" ||
+    value === "top" ||
+    value === "bottom"
+  );
+}
+
+function parseInfographicPlan(raw: string): RawPlan | null {
   const candidates = [
     raw.trim(),
     raw.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim() ?? "",
@@ -174,13 +249,188 @@ function parseInfographicBlueprint(raw: string): RawBlueprint | null {
         : candidate;
 
     try {
-      return JSON.parse(jsonCandidate) as RawBlueprint;
+      return JSON.parse(jsonCandidate) as RawPlan;
     } catch {
       continue;
     }
   }
 
   return null;
+}
+
+function normalizeInfographicPlan(parsed: RawPlan | null, fallback: InfographicPlan) {
+  const parsedVisualStyle = sanitizeString(parsed?.visualStyle);
+  const usedIds = new Set<string>();
+  const rawBlocks = Array.isArray(parsed?.blocks) ? parsed.blocks : [];
+  const blockCount =
+    rawBlocks.length >= 3
+      ? Math.min(rawBlocks.length, 8)
+      : fallback.blocks.length;
+
+  const blocks = Array.from({ length: blockCount }, (_, index) => {
+    const nextBlock = rawBlocks[index];
+    const fallbackBlock = fallback.blocks[index] ?? fallback.blocks.at(-1)!;
+    const title =
+      clampCopy(sanitizeString(nextBlock?.title), 4, 32) || fallbackBlock.title;
+
+    return {
+      id: ensureUniqueId(
+        sanitizeString(nextBlock?.id) || title,
+        fallbackBlock.id,
+        usedIds,
+      ),
+      title,
+      body:
+        clampCopy(sanitizeString(nextBlock?.body), 20, 120) ||
+        fallbackBlock.body,
+      role:
+        clampCopy(sanitizeString(nextBlock?.role), 4, 24) || fallbackBlock.role,
+      icon: normalizeInfographicIcon(
+        sanitizeString(nextBlock?.icon) || fallbackBlock.icon,
+      ),
+      emphasis:
+        clampCopy(sanitizeString(nextBlock?.emphasis), 5, 28) ||
+        fallbackBlock.emphasis,
+    };
+  });
+
+  const aliasMap = new Map<string, string>();
+
+  for (const block of blocks) {
+    aliasMap.set(block.id, block.id);
+    aliasMap.set(slugifyId(block.id), block.id);
+    aliasMap.set(slugifyId(block.title), block.id);
+    aliasMap.set(block.title.toLowerCase(), block.id);
+  }
+
+  const resolveBlockId = (value: unknown) => {
+    const raw = sanitizeString(value);
+    const lowered = raw.toLowerCase();
+    const slug = slugifyId(raw);
+
+    return aliasMap.get(raw) ?? aliasMap.get(lowered) ?? aliasMap.get(slug) ?? "";
+  };
+
+  const parsedConnections = Array.isArray(parsed?.connections)
+    ? parsed.connections
+    : [];
+  const connections = parsedConnections
+    .map((connection) => {
+      const fromId = resolveBlockId(connection?.fromId);
+      const toId = resolveBlockId(connection?.toId);
+      const style = sanitizeString(connection?.style).toLowerCase();
+
+      if (!fromId || !toId || fromId === toId || !isConnectionStyle(style)) {
+        return null;
+      }
+
+      return {
+        fromId,
+        toId,
+        label: clampCopy(sanitizeString(connection?.label), 8, 42),
+        style,
+      };
+    })
+    .filter((connection): connection is NonNullable<typeof connection> =>
+      Boolean(connection),
+    )
+    .slice(0, 12);
+
+  const fallbackConnections = fallback.connections
+    .map((connection) => {
+      const fromId = resolveBlockId(connection.fromId);
+      const toId = resolveBlockId(connection.toId);
+
+      if (!fromId || !toId || fromId === toId) {
+        return null;
+      }
+
+      return {
+        fromId,
+        toId,
+        label: connection.label,
+        style: connection.style,
+      };
+    })
+    .filter((connection): connection is NonNullable<typeof connection> =>
+      Boolean(connection),
+    );
+
+  const normalizedConnections =
+    connections.length >= 2 ? connections : fallbackConnections;
+
+  const parsedCallouts = Array.isArray(parsed?.callouts) ? parsed.callouts : [];
+  const callouts = parsedCallouts
+    .map((callout, index) => {
+      const anchorId = resolveBlockId(callout?.anchorId);
+      const placement = sanitizeString(callout?.placement).toLowerCase();
+
+      if (!anchorId || !isCalloutPlacement(placement)) {
+        return null;
+      }
+
+      const fallbackCallout = fallback.callouts[index] ?? fallback.callouts[0];
+
+      return {
+        title:
+          clampCopy(sanitizeString(callout?.title), 5, 30) ||
+          fallbackCallout?.title ||
+          "Callout",
+        body:
+          clampCopy(sanitizeString(callout?.body), 16, 108) ||
+          fallbackCallout?.body ||
+          "Important note.",
+        anchorId,
+        placement,
+        icon: normalizeInfographicIcon(
+          sanitizeString(callout?.icon) || fallbackCallout?.icon || "spark",
+        ),
+      };
+    })
+    .filter((callout): callout is NonNullable<typeof callout> => Boolean(callout))
+    .slice(0, 3);
+
+  const visualHooks = [
+    ...(Array.isArray(parsed?.visualHooks)
+      ? parsed.visualHooks
+          .map((hook) => clampCopy(sanitizeString(hook), 10, 68))
+          .filter(Boolean)
+      : []),
+    ...fallback.visualHooks,
+  ].slice(0, 8);
+
+  const animationBeats = [
+    ...(Array.isArray(parsed?.animationBeats)
+      ? parsed.animationBeats
+          .map((beat) => clampCopy(sanitizeString(beat), 12, 84))
+          .filter(Boolean)
+      : []),
+    ...fallback.animationBeats,
+  ].slice(0, 8);
+
+  return {
+    headline:
+      clampCopy(sanitizeString(parsed?.headline), 7, 38) || fallback.headline,
+    subhead:
+      clampCopy(sanitizeString(parsed?.subhead), 14, 96) || fallback.subhead,
+    visualStyle: isInfographicVisualStyleOption(parsedVisualStyle)
+      ? parsedVisualStyle
+      : fallback.visualStyle,
+    layoutSummary:
+      clampCopy(sanitizeString(parsed?.layoutSummary), 22, 160) ||
+      fallback.layoutSummary,
+    narrative:
+      clampCopy(sanitizeString(parsed?.narrative), 22, 160) || fallback.narrative,
+    palette:
+      clampCopy(sanitizeString(parsed?.palette), 12, 84) || fallback.palette,
+    footer:
+      clampCopy(sanitizeString(parsed?.footer), 18, 120) || fallback.footer,
+    blocks,
+    connections: normalizedConnections,
+    callouts: callouts.length > 0 ? callouts : fallback.callouts,
+    visualHooks,
+    animationBeats,
+  };
 }
 
 export async function POST(request: Request) {
@@ -250,7 +500,7 @@ export async function POST(request: Request) {
     "model" in payload &&
     typeof payload.model === "string"
       ? payload.model
-      : DEFAULT_MODEL;
+      : DEFAULT_INFOGRAPHIC_MODEL;
 
   const rawReasoningEffort =
     typeof payload === "object" &&
@@ -274,14 +524,18 @@ export async function POST(request: Request) {
     );
   }
 
-  const visualStyle = isInfographicVisualStyleOption(rawVisualStyle)
+  const requestedVisualStyle = isInfographicVisualStyleOption(rawVisualStyle)
     ? rawVisualStyle
     : DEFAULT_INFOGRAPHIC_VISUAL_STYLE;
-  const model = isTextModelOption(rawModel) ? rawModel : DEFAULT_MODEL;
+  const visualStyle = buildInfographicDefaultPlanStyle(
+    rawConcept,
+    requestedVisualStyle,
+  );
+  const model = isTextModelOption(rawModel) ? rawModel : DEFAULT_INFOGRAPHIC_MODEL;
   const reasoningEffort = isReasoningEffortOption(rawReasoningEffort)
     ? rawReasoningEffort
     : DEFAULT_REASONING_EFFORT;
-  const fallbackBlueprint = buildFallbackInfographicBlueprint({
+  const fallbackPlan = buildFallbackInfographicPlan({
     concept: rawConcept,
     audience: rawAudience,
     focus: rawFocus,
@@ -290,79 +544,110 @@ export async function POST(request: Request) {
 
   try {
     const openai = createOpenAIClient();
-    const planningResponse = await openai.responses.create({
+    const planningInput = [
+      {
+        role: "system" as const,
+        content: [
+          {
+            type: "input_text" as const,
+            text: "You expand technical concepts into clean editorial scene plans for single-image explainers. Return strict JSON only.",
+          },
+        ],
+      },
+      {
+        role: "user" as const,
+        content: [
+          {
+            type: "input_text" as const,
+            text: buildInfographicPlanPrompt({
+              concept: rawConcept,
+              audience: rawAudience,
+              focus: rawFocus,
+              visualStyle,
+              artDirection: rawArtDirection,
+            }),
+          },
+        ],
+      },
+    ];
+    let planningResponse = await openai.responses.create({
       model,
-      max_output_tokens: 900,
+      max_output_tokens: 1600,
       reasoning: { effort: reasoningEffort },
       text: {
         format: {
           type: "json_schema",
-          name: "infographic_blueprint",
+          name: "infographic_scene_plan",
           strict: true,
-          schema: infographicBlueprintSchema,
+          schema: infographicPlanSchema,
         },
       },
-      input: [
-        {
-          role: "system",
-          content: [
-            {
-              type: "input_text",
-              text: "You design crisp editorial blueprints for explanatory infographics. Return strict JSON only.",
-            },
-          ],
-        },
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: buildInfographicBlueprintPrompt({
-                concept: rawConcept,
-                audience: rawAudience,
-                focus: rawFocus,
-                visualStyle,
-                artDirection: rawArtDirection,
-              }),
-            },
-          ],
-        },
-      ],
+      input: planningInput,
     });
 
-    let blueprint: InfographicBlueprint | null = null;
-    let parsedBlueprint: RawBlueprint | null = null;
+    if (
+      planningResponse.status === "incomplete" &&
+      planningResponse.incomplete_details?.reason === "max_output_tokens"
+    ) {
+      logWarn(
+        "api.generate-infographic",
+        "Infographic plan hit token limit, retrying with larger budget",
+        {
+          requestId,
+          model,
+          reasoningEffort,
+          visualStyle,
+        },
+      );
+
+      planningResponse = await openai.responses.create({
+        model,
+        max_output_tokens: 3200,
+        reasoning: { effort: reasoningEffort === "none" ? "none" : "low" },
+        text: {
+          format: {
+            type: "json_schema",
+            name: "infographic_scene_plan_retry",
+            strict: true,
+            schema: infographicPlanSchema,
+          },
+        },
+        input: planningInput,
+      });
+    }
+
+    let parsedPlan: RawPlan | null = null;
 
     try {
-      parsedBlueprint = JSON.parse(planningResponse.output_text) as RawBlueprint;
+      parsedPlan = JSON.parse(planningResponse.output_text) as RawPlan;
     } catch {
-      parsedBlueprint = null;
+      parsedPlan = parseInfographicPlan(planningResponse.output_text);
     }
 
-    if (!parsedBlueprint) {
-      parsedBlueprint = parseInfographicBlueprint(planningResponse.output_text);
-    }
-
-    if (!parsedBlueprint) {
-      logWarn("api.generate-infographic", "Infographic blueprint parsing failed", {
+    if (!parsedPlan) {
+      logWarn("api.generate-infographic", "Infographic plan parsing failed", {
         requestId,
         model,
         reasoningEffort,
         visualStyle,
-        conceptLength: rawConcept.length,
-        outputPreview: planningResponse.output_text.slice(0, 700),
+        outputPreview: planningResponse.output_text.slice(0, 900),
       });
     }
 
-    blueprint = normalizeInfographicBlueprint(parsedBlueprint, fallbackBlueprint);
+    const plan = normalizeInfographicPlan(parsedPlan, fallbackPlan);
+    const pythonSource = buildInfographicSceneSource({ plan });
+    const sceneClassName = "InfographicScene";
+    const renderSource = "template";
+    const renderNotes = [
+      "Rendered from the local Manim layout template for cleaner structure and spacing.",
+      ...plan.visualHooks.slice(0, 3),
+    ].slice(0, 4);
 
-    const svgMarkup = buildInfographicSvgMarkup({
-      concept: rawConcept,
-      focus: rawFocus,
-      blueprint,
-      visualStyle,
+    const renderResult = await renderManimScene({
+      pythonSource,
+      sceneClassName,
+      requestId,
     });
-    const svgDataUrl = buildInfographicSvgDataUrl(svgMarkup);
 
     return finalizeJsonResponse(
       "api.generate-infographic",
@@ -373,19 +658,22 @@ export async function POST(request: Request) {
         concept: rawConcept,
         audience: rawAudience,
         focus: rawFocus,
-        blueprint,
-        visualStyle,
+        plan,
+        visualStyle: plan.visualStyle,
         graphicAlt: rawConcept.trim()
-          ? `Infographic explaining ${rawConcept.trim()}`
+          ? `${plan.headline}: infographic explaining ${rawConcept.trim()}`
           : "Concept infographic",
-        svgMarkup,
-        svgDataUrl,
+        pngDataUrl: renderResult.pngDataUrl,
+        pythonSource,
+        sceneClassName,
+        renderNotes,
+        renderSource,
         model,
         reasoningEffort,
         requestId,
       },
       undefined,
-      { requestId, model, reasoningEffort, visualStyle },
+      { requestId, model, reasoningEffort, visualStyle: plan.visualStyle },
     );
   } catch (error) {
     logError("api.generate-infographic", "Infographic generation failed", {
@@ -402,7 +690,7 @@ export async function POST(request: Request) {
       request,
       startedAt,
       {
-        error: "OpenAI could not generate an infographic right now.",
+        error: "The infographic could not be rendered right now.",
         requestId,
       },
       { status: 500 },

@@ -13,7 +13,7 @@ import {
   DEFAULT_INFOGRAPHIC_VISUAL_STYLE,
   getInfographicVisualStyleLabel,
   infographicVisualStyleOptions,
-  type InfographicBlueprint,
+  type InfographicPlan,
   type InfographicVisualStyleOption,
 } from "@/lib/infographic";
 import {
@@ -169,10 +169,13 @@ type InfographicResult = {
   concept: string;
   audience: string;
   focus: string;
-  blueprint: InfographicBlueprint;
+  plan: InfographicPlan;
   graphicAlt: string;
-  svgMarkup: string;
-  svgDataUrl: string;
+  pngDataUrl: string;
+  pythonSource: string;
+  sceneClassName: string;
+  renderNotes: string[];
+  renderSource: "template";
   visualStyle: InfographicVisualStyleOption;
   model: TextModelOption;
   reasoningEffort: ReasoningEffortOption;
@@ -191,13 +194,15 @@ type CopyActionButtonProps = {
   onClick: () => void;
 };
 
+const DEFAULT_INFOGRAPHIC_MODEL: TextModelOption = "gpt-5.4";
+
 const composerTabs = [
   ...platformOptions,
   {
     value: "infographic",
     label: "Infographics",
     helper:
-      "Turn one concept into a polished explanatory infographic with a generated visual blueprint.",
+      "Turn one concept into a Manim-rendered explanatory board with a generated scene plan and code.",
   },
   {
     value: "shorts",
@@ -479,51 +484,6 @@ function downloadTextFile(content: string, filename: string, mimeType: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-async function downloadSvgAsPng(svgMarkup: string, filename: string) {
-  const svgBlob = new Blob([svgMarkup], {
-    type: "image/svg+xml;charset=utf-8",
-  });
-  const svgUrl = URL.createObjectURL(svgBlob);
-
-  try {
-    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const nextImage = new window.Image();
-      nextImage.onload = () => resolve(nextImage);
-      nextImage.onerror = () =>
-        reject(new Error("The SVG preview could not be loaded."));
-      nextImage.src = svgUrl;
-    });
-
-    const canvas = document.createElement("canvas");
-    canvas.width = 1440;
-    canvas.height = 960;
-
-    const context = canvas.getContext("2d");
-
-    if (!context) {
-      throw new Error("Canvas is not available in this browser.");
-    }
-
-    context.fillStyle = "#f7f2e7";
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.drawImage(image, 0, 0, canvas.width, canvas.height);
-
-    const pngBlob = await new Promise<Blob | null>((resolve) => {
-      canvas.toBlob(resolve, "image/png");
-    });
-
-    if (!pngBlob) {
-      throw new Error("The PNG export returned an empty file.");
-    }
-
-    const pngUrl = URL.createObjectURL(pngBlob);
-    triggerDownload(pngUrl, filename);
-    window.setTimeout(() => URL.revokeObjectURL(pngUrl), 1000);
-  } finally {
-    URL.revokeObjectURL(svgUrl);
-  }
-}
-
 function escapeHtml(value: string) {
   return value
     .replaceAll("&", "&amp;")
@@ -605,23 +565,40 @@ function buildShortPackCopy(result: ShortResult) {
   ].join("\n\n");
 }
 
-function buildInfographicBlueprintCopy(result: InfographicResult) {
+function buildInfographicPlanCopy(result: InfographicResult) {
   return [
     `Concept: ${result.concept}`,
-    `Headline: ${result.blueprint.headline}`,
-    `Subhead: ${result.blueprint.subhead}`,
-    `Narrative: ${result.blueprint.narrative}`,
-    `Layout: ${result.blueprint.layout}`,
-    `Palette: ${result.blueprint.palette}`,
-    `Panels:\n${result.blueprint.panels
+    `Headline: ${result.plan.headline}`,
+    `Subhead: ${result.plan.subhead}`,
+    `Narrative: ${result.plan.narrative}`,
+    `Layout: ${result.plan.layoutSummary}`,
+    `Palette: ${result.plan.palette}`,
+    `Footer: ${result.plan.footer}`,
+    `Blocks:\n${result.plan.blocks
       .map(
-        (panel, index) =>
-          `${index + 1}. ${panel.title}: ${panel.detail} (${panel.accent})`,
+        (block, index) =>
+          `${index + 1}. ${block.title}: ${block.body} [${block.role}; ${block.icon}; ${block.emphasis}]`,
       )
       .join("\n")}`,
-    `Visual hooks:\n${result.blueprint.visualHooks
+    `Connections:\n${result.plan.connections
+      .map(
+        (connection, index) =>
+          `${index + 1}. ${connection.fromId} -> ${connection.toId}: ${connection.label} (${connection.style})`,
+      )
+      .join("\n")}`,
+    `Callouts:\n${result.plan.callouts
+      .map(
+        (callout, index) =>
+          `${index + 1}. ${callout.title}: ${callout.body} [${callout.anchorId}; ${callout.placement}; ${callout.icon}]`,
+      )
+      .join("\n")}`,
+    `Visual hooks:\n${result.plan.visualHooks
       .map((hook) => `- ${hook}`)
       .join("\n")}`,
+    `Animation beats:\n${result.plan.animationBeats
+      .map((beat) => `- ${beat}`)
+      .join("\n")}`,
+    `Render notes:\n${result.renderNotes.map((note) => `- ${note}`).join("\n")}`,
   ].join("\n\n");
 }
 
@@ -721,8 +698,8 @@ function InfographicIdleState() {
           Ready for one visual explainer
         </h3>
         <p className="mt-3 max-w-lg text-sm leading-7 text-white/60">
-          Generate a concept infographic to preview the rendered diagram and
-          the explanatory blueprint in this pane.
+          Generate a concept infographic to preview the rendered board, scene
+          plan, and generated Manim code in this pane.
         </p>
       </div>
     </div>
@@ -745,7 +722,8 @@ function InfographicLoadingState() {
               Infographic Draft
             </p>
             <p className="mt-1 text-sm text-white/68">
-              Building the explanation plan and laying out the SVG diagram.
+              Expanding the concept, writing Manim code, and rendering the
+              board.
             </p>
           </div>
         </div>
@@ -1862,7 +1840,8 @@ function InfographicComposer() {
   const [focus, setFocus] = useState("Explain how it works and why it matters");
   const [visualStyle, setVisualStyle] =
     useState<InfographicVisualStyleOption>(DEFAULT_INFOGRAPHIC_VISUAL_STYLE);
-  const [model, setModel] = useState<TextModelOption>(DEFAULT_MODEL);
+  const [model, setModel] =
+    useState<TextModelOption>(DEFAULT_INFOGRAPHIC_MODEL);
   const [reasoningEffort, setReasoningEffort] =
     useState<ReasoningEffortOption>(DEFAULT_REASONING_EFFORT);
   const [artDirection, setArtDirection] = useState("");
@@ -1960,23 +1939,23 @@ function InfographicComposer() {
     }
   }
 
-  async function handleDownloadPng(nextResult: InfographicResult) {
+  function handleDownloadPng(nextResult: InfographicResult) {
     try {
-      await downloadSvgAsPng(nextResult.svgMarkup, "concept-infographic.png");
+      triggerDownload(nextResult.pngDataUrl, "concept-infographic.png");
     } catch {
-      setError("PNG export failed. Try downloading the SVG instead.");
+      setError("PNG export failed. Try downloading the Python scene instead.");
     }
   }
 
-  function handleDownloadSvg(nextResult: InfographicResult) {
+  function handleDownloadPython(nextResult: InfographicResult) {
     try {
       downloadTextFile(
-        nextResult.svgMarkup,
-        "concept-infographic.svg",
-        "image/svg+xml;charset=utf-8",
+        nextResult.pythonSource,
+        "concept-infographic.py",
+        "text/x-python;charset=utf-8",
       );
     } catch {
-      setError("SVG export failed. Try again.");
+      setError("Python export failed. Try again.");
     }
   }
 
@@ -1992,8 +1971,8 @@ function InfographicComposer() {
               Generate one concept explainer
             </h2>
             <p className="max-w-lg text-sm leading-7 text-white/68">
-              This flow renders a real diagram with readable labels, arrows,
-              pastel panels, and export-ready SVG or PNG output.
+              This flow expands the concept, writes a Manim scene, and renders
+              the final board as a real image with readable labels and layout.
             </p>
           </div>
 
@@ -2084,7 +2063,7 @@ function InfographicComposer() {
                     )
                     .join(" ")}
                 >
-                  Planning model
+                  Agent model
                 </FieldLabelWithInfo>
                 <select
                   id="infographic-model"
@@ -2159,18 +2138,20 @@ function InfographicComposer() {
               />
               <p className="text-xs leading-6 text-white/45">
                 Use this for notes like hand-drawn explainer, whiteboard style,
-                soft pastel, or sketched systems diagram.
+                soft pastel, DailyDose-like architecture board, or sketched
+                systems diagram.
               </p>
             </div>
 
             <div className="rounded-[1rem] border border-[#f6b26b]/20 bg-[#f6b26b]/8 px-4 py-3">
               <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-[#ffd7ad]">
-                Diagram renderer
+                Agent pipeline
               </p>
               <p className="mt-2 text-sm leading-7 text-white/74">
-                This mode does not ask the image model to fake an infographic.
-                It generates a structured blueprint and renders the diagram as
-                SVG so the labels, arrows, and layout stay readable.
+                The first pass expands your concept into a visual plan. The
+                second pass writes Manim code for that plan. The server then
+                executes the scene and returns the rendered image plus the
+                Python source.
               </p>
             </div>
 
@@ -2180,10 +2161,10 @@ function InfographicComposer() {
               className="inline-flex w-full items-center justify-center rounded-full bg-[#f6b26b] px-5 py-2.5 text-sm font-medium text-[#171717] transition hover:bg-[#ffc58f] disabled:cursor-not-allowed disabled:bg-[#c79d6b]"
             >
               {isPending
-                ? "Generating infographic..."
+                ? "Rendering infographic..."
                 : result
-                  ? "Regenerate infographic"
-                  : "Generate infographic"}
+                  ? "Re-render infographic"
+                  : "Render infographic"}
             </button>
           </form>
         </div>
@@ -2202,32 +2183,39 @@ function InfographicComposer() {
                   </p>
                   <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.16em] text-white/42">
                     {getInfographicVisualStyleLabel(result.visualStyle)} ·{" "}
-                    {result.blueprint.panels.length} panels · rendered SVG
+                    {result.plan.blocks.length} blocks · Manim compiled scene
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => void handleDownloadPng(result)}
+                    onClick={() => handleDownloadPng(result)}
                     className="inline-flex items-center justify-center rounded-full border border-white/12 bg-white/[0.04] px-3 py-1.5 text-xs text-white/75 transition hover:border-[#ffb499] hover:text-white"
                   >
                     Download PNG
                   </button>
                   <button
                     type="button"
-                    onClick={() => handleDownloadSvg(result)}
+                    onClick={() => handleDownloadPython(result)}
                     className="inline-flex items-center justify-center rounded-full border border-white/12 bg-white/[0.04] px-3 py-1.5 text-xs text-white/75 transition hover:border-[#ffb499] hover:text-white"
                   >
-                    Download SVG
+                    Download Python
                   </button>
                   <CopyActionButton
-                    copied={copyState === "infographic-blueprint"}
-                    label="Copy infographic blueprint"
+                    copied={copyState === "infographic-plan"}
+                    label="Copy plan"
                     onClick={() =>
                       handleCopy(
-                        buildInfographicBlueprintCopy(result),
-                        "infographic-blueprint",
+                        buildInfographicPlanCopy(result),
+                        "infographic-plan",
                       )
+                    }
+                  />
+                  <CopyActionButton
+                    copied={copyState === "infographic-code"}
+                    label="Copy Manim code"
+                    onClick={() =>
+                      handleCopy(result.pythonSource, "infographic-code")
                     }
                   />
                 </div>
@@ -2235,10 +2223,13 @@ function InfographicComposer() {
 
               <div className="mt-4 overflow-hidden rounded-[1.1rem] border border-white/8 bg-[#f3ede1] p-3">
                 <div className="overflow-hidden rounded-[0.95rem] border border-[#dbcdb8] bg-white shadow-[0_10px_30px_rgba(23,23,23,0.08)]">
-                  <div
-                    aria-label={result.graphicAlt}
-                    className="[&_svg]:block [&_svg]:h-auto [&_svg]:w-full"
-                    dangerouslySetInnerHTML={{ __html: result.svgMarkup }}
+                  <Image
+                    src={result.pngDataUrl}
+                    alt={result.graphicAlt}
+                    width={1440}
+                    height={810}
+                    unoptimized
+                    className="block h-auto w-full"
                   />
                 </div>
               </div>
@@ -2250,34 +2241,42 @@ function InfographicComposer() {
                       Headline
                     </p>
                     <h3 className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-white">
-                      {result.blueprint.headline}
+                      {result.plan.headline}
                     </h3>
                     <p className="mt-2 text-sm leading-7 text-white/72">
-                      {result.blueprint.subhead}
+                      {result.plan.subhead}
                     </p>
                     <p className="mt-3 text-sm leading-7 text-[#9ad6ff]">
-                      {result.blueprint.narrative}
+                      {result.plan.narrative}
                     </p>
                   </div>
 
                   <div className="grid gap-3 sm:grid-cols-2">
-                    {result.blueprint.panels.map((panel, index) => (
+                    {result.plan.blocks.map((block, index) => (
                       <div
-                        key={`${result.concept}-panel-${index}`}
+                        key={`${result.concept}-block-${block.id}`}
                         className="rounded-[1rem] border border-white/8 bg-black/20 p-4"
                       >
                         <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-[#ffb499]">
-                          Panel {index + 1}
+                          Block {index + 1}
                         </p>
                         <p className="mt-2 text-base font-medium text-white">
-                          {panel.title}
+                          {block.title}
                         </p>
                         <p className="mt-2 text-sm leading-7 text-white/70">
-                          {panel.detail}
+                          {block.body}
                         </p>
-                        <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.16em] text-[#7ec9ff]">
-                          {panel.accent}
-                        </p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <span className="rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 text-[10px] font-mono uppercase tracking-[0.14em] text-[#7ec9ff]">
+                            {block.role}
+                          </span>
+                          <span className="rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 text-[10px] font-mono uppercase tracking-[0.14em] text-[#ffd7ad]">
+                            {block.icon}
+                          </span>
+                          <span className="rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 text-[10px] font-mono uppercase tracking-[0.14em] text-white/60">
+                            {block.emphasis}
+                          </span>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -2289,19 +2288,79 @@ function InfographicComposer() {
                       Layout spine
                     </p>
                     <p className="mt-2 text-sm leading-7 text-white/76">
-                      {result.blueprint.layout}
+                      {result.plan.layoutSummary}
                     </p>
                   </div>
 
                   <div className="rounded-[1rem] border border-white/8 bg-white/[0.03] p-4">
                     <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-[#ffb499]">
-                      Renderer
+                      Connections
                     </p>
-                    <p className="mt-2 text-sm leading-7 text-white/76">
-                      Export PNG for social posts and SVG for crisp editing or
-                      iteration. The preview above is the exact diagram being
-                      exported, not an abstract AI image.
+                    <div className="mt-3 space-y-2">
+                      {result.plan.connections.map((connection) => (
+                        <p
+                          key={`${connection.fromId}-${connection.toId}-${connection.label}`}
+                          className="text-sm leading-7 text-white/74"
+                        >
+                          <span className="font-mono text-[#7ec9ff]">
+                            {connection.fromId}
+                          </span>{" "}
+                          to{" "}
+                          <span className="font-mono text-[#7ec9ff]">
+                            {connection.toId}
+                          </span>
+                          {" · "}
+                          {connection.label || "unlabeled"}{" "}
+                          <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-white/42">
+                            {connection.style}
+                          </span>
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-[1rem] border border-white/8 bg-white/[0.03] p-4">
+                    <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-[#ffb499]">
+                      Callouts
                     </p>
+                    <div className="mt-3 space-y-3">
+                      {result.plan.callouts.length > 0 ? (
+                        result.plan.callouts.map((callout) => (
+                          <div
+                            key={`${callout.anchorId}-${callout.title}`}
+                            className="rounded-[0.9rem] border border-white/8 bg-black/20 p-3"
+                          >
+                            <p className="text-sm font-medium text-white">
+                              {callout.title}
+                            </p>
+                            <p className="mt-2 text-sm leading-7 text-white/70">
+                              {callout.body}
+                            </p>
+                            <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.14em] text-[#7ec9ff]">
+                              {callout.anchorId} · {callout.placement} ·{" "}
+                              {callout.icon}
+                            </p>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-sm leading-7 text-white/60">
+                          No side callouts were needed for this board.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-[1rem] border border-white/8 bg-white/[0.03] p-4">
+                    <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-[#ffb499]">
+                      Render notes
+                    </p>
+                    <div className="mt-3 space-y-2">
+                      {result.renderNotes.map((note) => (
+                        <p key={note} className="text-sm leading-7 text-white/74">
+                          {note}
+                        </p>
+                      ))}
+                    </div>
                   </div>
 
                   <div className="rounded-[1rem] border border-white/8 bg-white/[0.03] p-4">
@@ -2309,7 +2368,7 @@ function InfographicComposer() {
                       Visual hooks
                     </p>
                     <div className="mt-3 flex flex-wrap gap-2">
-                      {result.blueprint.visualHooks.map((hook) => (
+                      {result.plan.visualHooks.map((hook) => (
                         <span
                           key={hook}
                           className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1.5 text-xs text-white/74"
@@ -2323,9 +2382,9 @@ function InfographicComposer() {
               </div>
 
               <p className="mt-3 text-xs leading-6 text-white/48">
-                The exact explanation is surfaced in the blueprint cards here,
-                while the diagram itself is rendered as a real SVG so the text,
-                arrows, and structure stay legible.
+                The explanation plan is surfaced here, while the preview above
+                is the exact Manim render returned by the server. The generated
+                Python scene is downloadable for iteration.
               </p>
             </div>
           </div>
