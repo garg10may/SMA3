@@ -12,12 +12,6 @@ export const mediumImageStyleOptions = [
       "Minimalist poster-style artwork with bold shapes, restrained detail, and a memorable silhouette.",
   },
   {
-    value: "infographic",
-    label: "Infographic",
-    prompt:
-      "Infographic-inspired editorial artwork with clean visual storytelling, simple diagrams or symbolic chart motifs, and no readable text.",
-  },
-  {
     value: "two-dimensional",
     label: "2D illustration",
     prompt:
