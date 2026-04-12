@@ -297,6 +297,36 @@ export function getMemeTemplateBlankUrl(
   return `${baseUrl}/images/${templateId}.jpg`;
 }
 
+export function readMemegenApiKey() {
+  const apiKey = process.env.MEMEGEN_API_KEY?.trim();
+  return apiKey || "";
+}
+
+function escapeMemegenLine(value: string) {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return "_";
+  }
+
+  return trimmed
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replaceAll("_", "__")
+    .replaceAll("-", "--")
+    .replaceAll("?", "~q")
+    .replaceAll("&", "~a")
+    .replaceAll("%", "~p")
+    .replaceAll("#", "~h")
+    .replaceAll("/", "~s")
+    .replaceAll("\\", "~b")
+    .replaceAll("<", "~l")
+    .replaceAll(">", "~g")
+    .replaceAll('"', "''")
+    .replaceAll("\n", "~n")
+    .replace(/\s/g, "_");
+}
+
 export function normalizeMemeLines(lines: string[], lineCount: number) {
   return Array.from({ length: lineCount }, (_, index) => lines[index]?.trim() ?? "");
 }
@@ -305,18 +335,16 @@ export function buildMemegenImageUrl(
   templateId: string,
   lines: string[],
   options?: {
-    baseUrl?: string;
     width?: number;
     font?: string;
   },
 ) {
-  const baseUrl = options?.baseUrl ?? DEFAULT_MEMEGEN_API_BASE_URL;
-  const url = new URL(`${baseUrl}/images/preview.jpg`);
+  const url = new URL("http://localhost/api/meme-image");
 
   url.searchParams.set("template", templateId);
 
   for (const line of normalizeMemeLines(lines, lines.length)) {
-    url.searchParams.append("lines[]", line || " ");
+    url.searchParams.append("lines[]", escapeMemegenLine(line));
   }
 
   if (options?.width) {
@@ -327,5 +355,5 @@ export function buildMemegenImageUrl(
     url.searchParams.set("font", options.font);
   }
 
-  return url.toString();
+  return `${url.pathname}${url.search}`;
 }

@@ -6,7 +6,6 @@ import { maybeParseResponse } from "openai/lib/ResponsesParser";
 import type { ResponseCreateParamsNonStreaming } from "openai/resources/responses/responses";
 import {
   buildMemegenImageUrl,
-  DEFAULT_MEMEGEN_API_BASE_URL,
   type MemeTemplate,
   getMemeTemplateBlankUrl,
   getMemeTemplateCatalog,
@@ -591,7 +590,6 @@ function buildMemeResult(
     rationale: plan.why?.trim() || describeTemplate(template),
     lines,
     imageUrl: buildMemegenImageUrl(template.id, lines, {
-      baseUrl: DEFAULT_MEMEGEN_API_BASE_URL,
       width: 1200,
       font: "impact",
     }),
