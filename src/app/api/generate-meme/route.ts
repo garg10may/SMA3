@@ -5,10 +5,9 @@ import { createOpenAIClient } from "@/lib/openai-server";
 import {
   buildMemegenImageUrl,
   DEFAULT_MEMEGEN_API_BASE_URL,
-  getMemeTemplate,
+  type MemeTemplate,
   getMemeTemplateBlankUrl,
-  isMemeTemplateId,
-  memeTemplateCatalog,
+  getMemeTemplateCatalog,
   normalizeMemeLines,
 } from "@/lib/meme-agent";
 import {
@@ -16,8 +15,12 @@ import {
   DEFAULT_REASONING_EFFORT,
   DEFAULT_TONE,
   getTonePrompt,
+  isReasoningEffortOption,
+  isTextModelOption,
   isToneOption,
   MAX_BRIEF_LENGTH,
+  type ReasoningEffortOption,
+  type TextModelOption,
 } from "@/lib/post-config";
 
 export const runtime = "nodejs";
@@ -42,9 +45,25 @@ type ResolvedMemeResult = {
   lines: string[];
   imageUrl: string;
   blankUrl: string;
+  model: TextModelOption;
+  reasoningEffort: ReasoningEffortOption;
   requestId: string;
   fallback?: boolean;
 };
+
+const DEFAULT_TEMPLATE_CANDIDATES = [
+  "drake",
+  "same",
+  "fine",
+  "rollsafe",
+  "buzz",
+  "cmm",
+  "both",
+  "grusplan",
+  "patrick",
+  "spongebob",
+  "facepalm",
+] as const;
 
 function extractJsonObject(text: string) {
   const fencedBlock = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
@@ -83,38 +102,150 @@ function splitContent(content: string) {
   };
 }
 
-function chooseFallbackTemplate(content: string, templateOverride: string) {
-  if (templateOverride && isMemeTemplateId(templateOverride)) {
-    return getMemeTemplate(templateOverride);
+function describeTemplate(template: MemeTemplate) {
+  const keywordSummary =
+    template.keywords.length > 0 ? template.keywords.slice(0, 4).join(", ") : "general reaction";
+
+  return `${template.lines} line${template.lines === 1 ? "" : "s"} · keywords: ${keywordSummary}`;
+}
+
+function tokenize(value: string) {
+  return value
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3);
+}
+
+function scoreTemplate(template: MemeTemplate, tokens: string[]) {
+  const idTokens = tokenize(template.id);
+  const nameTokens = tokenize(template.name);
+  const keywordTokens = template.keywords.flatMap((keyword) => tokenize(keyword));
+  const searchable = new Set([...idTokens, ...nameTokens, ...keywordTokens]);
+
+  let score = 0;
+
+  for (const token of tokens) {
+    if (template.id === token) {
+      score += 20;
+    }
+
+    if (nameTokens.includes(token)) {
+      score += 8;
+    }
+
+    if (keywordTokens.includes(token)) {
+      score += 10;
+    }
+
+    if (Array.from(searchable).some((entry) => entry.includes(token))) {
+      score += 3;
+    }
+  }
+
+  if (template.lines <= 2) {
+    score += 1;
+  }
+
+  return score;
+}
+
+function selectTemplateCandidates(
+  templates: MemeTemplate[],
+  content: string,
+  direction: string,
+  templateOverride: string,
+) {
+  if (templateOverride) {
+    const overrideTemplate = templates.find((template) => template.id === templateOverride);
+    return overrideTemplate ? [overrideTemplate] : [];
+  }
+
+  const queryTokens = tokenize(`${content} ${direction}`);
+  const scoredTemplates = templates
+    .map((template) => ({
+      template,
+      score: scoreTemplate(template, queryTokens),
+    }))
+    .sort((left, right) => right.score - left.score || left.template.name.localeCompare(right.template.name));
+
+  const selected = new Map<string, MemeTemplate>();
+
+  for (const templateId of DEFAULT_TEMPLATE_CANDIDATES) {
+    const template = templates.find((entry) => entry.id === templateId);
+
+    if (template) {
+      selected.set(template.id, template);
+    }
+  }
+
+  for (const item of scoredTemplates) {
+    if (selected.size >= 28) {
+      break;
+    }
+
+    if (item.score <= 0 && selected.size >= 16) {
+      continue;
+    }
+
+    selected.set(item.template.id, item.template);
+  }
+
+  if (selected.size === 0) {
+    for (const template of templates.slice(0, 20)) {
+      selected.set(template.id, template);
+    }
+  }
+
+  return Array.from(selected.values());
+}
+
+function chooseFallbackTemplate(
+  templates: MemeTemplate[],
+  content: string,
+  templateOverride: string,
+) {
+  if (templateOverride) {
+    const overrideTemplate = templates.find((template) => template.id === templateOverride);
+
+    if (overrideTemplate) {
+      return overrideTemplate;
+    }
   }
 
   const normalized = content.toLowerCase();
+  const find = (templateId: string) =>
+    templates.find((template) => template.id === templateId) ?? null;
 
   if (/\b(both|either|and also|why not)\b/.test(normalized)) {
-    return getMemeTemplate("both");
+    return find("both");
   }
 
   if (/\b(not sure|confused|unclear|maybe)\b/.test(normalized)) {
-    return getMemeTemplate("fry");
+    return find("fry");
   }
 
   if (/\b(regret|mistake|bad choice|backfired|oops)\b/.test(normalized)) {
-    return getMemeTemplate("badchoice");
+    return find("badchoice");
   }
 
   if (/\b(opinion|take|hot take|debate|argue)\b/.test(normalized)) {
-    return getMemeTemplate("cmm");
+    return find("cmm");
   }
 
   if (/\b(too many|everywhere|all over|flood|flooded|spam)\b/.test(normalized)) {
-    return getMemeTemplate("buzz");
+    return find("buzz");
   }
 
-  return getMemeTemplate("buzz");
+  return find("buzz");
 }
 
-function buildFallbackPlan(content: string, templateOverride: string): MemePlan {
-  const template = chooseFallbackTemplate(content, templateOverride);
+function buildFallbackPlan(
+  templates: MemeTemplate[],
+  content: string,
+  templateOverride: string,
+): MemePlan {
+  const template = chooseFallbackTemplate(templates, content, templateOverride);
 
   if (!template) {
     throw new Error("No fallback meme template is available.");
@@ -156,15 +287,18 @@ function buildFallbackPlan(content: string, templateOverride: string): MemePlan 
 }
 
 function buildMemeResult(
+  templates: MemeTemplate[],
   plan: MemePlan,
   requestId: string,
   templateOverride: string,
+  model: TextModelOption,
+  reasoningEffort: ReasoningEffortOption,
   fallback = false,
 ): ResolvedMemeResult {
   const templateId =
-    templateOverride && isMemeTemplateId(templateOverride)
+    templateOverride && templates.some((template) => template.id === templateOverride)
       ? templateOverride
-      : isMemeTemplateId(plan.templateId)
+      : templates.some((template) => template.id === plan.templateId)
         ? plan.templateId
         : "";
 
@@ -172,7 +306,7 @@ function buildMemeResult(
     throw new Error("The planner returned an unknown meme template.");
   }
 
-  const template = getMemeTemplate(templateId);
+  const template = templates.find((entry) => entry.id === templateId) ?? null;
 
   if (!template) {
     throw new Error("The selected meme template is missing from the catalog.");
@@ -182,7 +316,7 @@ function buildMemeResult(
     Array.isArray(plan.lines)
       ? plan.lines.map((line) => sanitizeLine(String(line)))
       : [],
-    template.lineCount,
+    template.lines,
   );
 
   return {
@@ -190,11 +324,11 @@ function buildMemeResult(
     template: {
       id: template.id,
       name: template.name,
-      lineCount: template.lineCount,
-      helper: template.helper,
+      lineCount: template.lines,
+      helper: describeTemplate(template),
     },
     title: plan.title?.trim() || template.name,
-    rationale: plan.why?.trim() || template.helper,
+    rationale: plan.why?.trim() || describeTemplate(template),
     lines,
     imageUrl: buildMemegenImageUrl(template.id, lines, {
       baseUrl: DEFAULT_MEMEGEN_API_BASE_URL,
@@ -202,21 +336,24 @@ function buildMemeResult(
       font: "impact",
     }),
     blankUrl: getMemeTemplateBlankUrl(template.id),
+    model,
+    reasoningEffort,
     requestId,
     fallback,
   };
 }
 
 function buildPlannerPrompt(input: {
+  templates: MemeTemplate[];
   content: string;
   direction: string;
   tonePrompt: string;
   templateOverride: string;
 }) {
-  const catalog = memeTemplateCatalog
+  const catalog = input.templates
     .map(
       (template) =>
-        `- ${template.id} | ${template.name} | ${template.lineCount} lines | ${template.helper} | keywords: ${template.keywords.join(", ")}`,
+        `- ${template.id} | ${template.name} | ${describeTemplate(template)} | styles: ${template.styles.join(", ") || "none"}`,
     )
     .join("\n");
 
@@ -252,6 +389,27 @@ function buildPlannerPrompt(input: {
     "",
     "Template catalog:",
     catalog,
+  ].join("\n");
+}
+
+function buildPlannerRepairPrompt(input: {
+  templates: MemeTemplate[];
+  rawOutput: string;
+}) {
+  const allowedIds = input.templates.map((template) => template.id).join(", ");
+
+  return [
+    "Convert the previous meme-planner output into strict JSON.",
+    'Return only valid JSON with this shape: { "templateId": "...", "title": "...", "why": "...", "lines": ["...", "..."] }',
+    `Allowed template ids: ${allowedIds}`,
+    "Rules:",
+    "- Keep templateId to one allowed value only.",
+    "- Keep each non-empty line under 42 characters.",
+    "- Preserve the original intent if possible.",
+    "- If the original output is unusable, infer the best valid JSON from it.",
+    "",
+    "Original output:",
+    input.rawOutput,
   ].join("\n");
 }
 
@@ -305,6 +463,22 @@ export async function POST(request: Request) {
       ? payload.templateId.trim()
       : "";
 
+  const rawModel =
+    typeof payload === "object" &&
+    payload !== null &&
+    "model" in payload &&
+    typeof payload.model === "string"
+      ? payload.model
+      : DEFAULT_MODEL;
+
+  const rawReasoningEffort =
+    typeof payload === "object" &&
+    payload !== null &&
+    "reasoningEffort" in payload &&
+    typeof payload.reasoningEffort === "string"
+      ? payload.reasoningEffort
+      : DEFAULT_REASONING_EFFORT;
+
   if (rawContent.length < 12 || rawContent.length > MAX_BRIEF_LENGTH) {
     return finalizeJsonResponse(
       "api.generate-meme",
@@ -319,13 +493,26 @@ export async function POST(request: Request) {
     );
   }
 
-  if (rawTemplateId && !isMemeTemplateId(rawTemplateId)) {
+  const tone = isToneOption(rawTone) ? rawTone : DEFAULT_TONE;
+  const model = isTextModelOption(rawModel) ? rawModel : DEFAULT_MODEL;
+  const reasoningEffort = isReasoningEffortOption(rawReasoningEffort)
+    ? rawReasoningEffort
+    : DEFAULT_REASONING_EFFORT;
+  const templates = await getMemeTemplateCatalog();
+  const candidateTemplates = selectTemplateCandidates(
+    templates,
+    rawContent,
+    rawDirection,
+    rawTemplateId,
+  );
+
+  if (rawTemplateId && !templates.some((template) => template.id === rawTemplateId)) {
     return finalizeJsonResponse(
       "api.generate-meme",
       request,
       startedAt,
       {
-        error: "The selected meme template is not supported in this build.",
+        error: "The selected meme template is not available in the live memegen catalog.",
         requestId,
       },
       { status: 400 },
@@ -333,14 +520,12 @@ export async function POST(request: Request) {
     );
   }
 
-  const tone = isToneOption(rawTone) ? rawTone : DEFAULT_TONE;
-
   try {
     const openai = createOpenAIClient();
     const response = await openai.responses.create({
-      model: DEFAULT_MODEL,
+      model,
       max_output_tokens: 500,
-      reasoning: { effort: DEFAULT_REASONING_EFFORT },
+      reasoning: { effort: reasoningEffort },
       input: [
         {
           role: "system",
@@ -357,6 +542,7 @@ export async function POST(request: Request) {
             {
               type: "input_text",
               text: buildPlannerPrompt({
+                templates: candidateTemplates,
                 content: rawContent,
                 direction: rawDirection,
                 tonePrompt: getTonePrompt(tone),
@@ -368,8 +554,65 @@ export async function POST(request: Request) {
       ],
     });
 
-    const plan = extractJsonObject(response.output_text.trim());
-    const result = buildMemeResult(plan, requestId, rawTemplateId);
+    let result: ResolvedMemeResult;
+
+    try {
+      const plan = extractJsonObject(response.output_text.trim());
+      result = buildMemeResult(
+        templates,
+        plan,
+        requestId,
+        rawTemplateId,
+        model,
+        reasoningEffort,
+      );
+    } catch (plannerError) {
+      logWarn("api.generate-meme", "Meme planner output invalid, attempting repair", {
+        requestId,
+        tone,
+        templateId: rawTemplateId || undefined,
+        error: plannerError,
+      });
+
+      const repairResponse = await openai.responses.create({
+        model,
+        max_output_tokens: 300,
+        reasoning: { effort: "low" },
+        input: [
+          {
+            role: "system",
+            content: [
+              {
+                type: "input_text",
+                text: "You repair malformed meme planner output into strict JSON.",
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: buildPlannerRepairPrompt({
+                  templates: candidateTemplates,
+                  rawOutput: response.output_text.trim(),
+                }),
+              },
+            ],
+          },
+        ],
+      });
+
+      const repairedPlan = extractJsonObject(repairResponse.output_text.trim());
+      result = buildMemeResult(
+        templates,
+        repairedPlan,
+        requestId,
+        rawTemplateId,
+        model,
+        reasoningEffort,
+      );
+    }
 
     return finalizeJsonResponse(
       "api.generate-meme",
@@ -377,7 +620,14 @@ export async function POST(request: Request) {
       startedAt,
       result,
       undefined,
-      { requestId, templateId: result.template.id, tone, fallback: false },
+      {
+        requestId,
+        templateId: result.template.id,
+        tone,
+        model,
+        reasoningEffort,
+        fallback: false,
+      },
     );
   } catch (error) {
     logWarn("api.generate-meme", "Meme planning failed, using fallback", {
@@ -388,11 +638,14 @@ export async function POST(request: Request) {
     });
 
     try {
-      const fallbackPlan = buildFallbackPlan(rawContent, rawTemplateId);
+      const fallbackPlan = buildFallbackPlan(templates, rawContent, rawTemplateId);
       const fallbackResult = buildMemeResult(
+        templates,
         fallbackPlan,
         requestId,
         rawTemplateId,
+        model,
+        reasoningEffort,
         true,
       );
 
@@ -405,6 +658,8 @@ export async function POST(request: Request) {
         {
           requestId,
           tone,
+          model,
+          reasoningEffort,
           templateId: fallbackResult.template.id,
           fallback: true,
         },
@@ -426,7 +681,13 @@ export async function POST(request: Request) {
           requestId,
         },
         { status: 500 },
-        { requestId, tone, templateId: rawTemplateId || undefined },
+        {
+          requestId,
+          tone,
+          model,
+          reasoningEffort,
+          templateId: rawTemplateId || undefined,
+        },
       );
     }
   }
