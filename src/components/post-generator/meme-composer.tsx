@@ -424,7 +424,7 @@ export function MemeComposer() {
                   </a>
                   <a
                     href={result.imageUrl}
-                    download={`${result.template.id}.png`}
+                    download={`${result.template.id}.jpg`}
                     className="inline-flex items-center justify-center rounded-full border border-white/12 bg-white/[0.04] px-3 py-1.5 text-xs text-white/75 transition hover:border-[#ffb499] hover:text-white"
                   >
                     Download

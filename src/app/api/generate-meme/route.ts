@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { logError, logWarn } from "@/lib/logger";
+import { logError, logInfo, logWarn } from "@/lib/logger";
 import { finalizeJsonResponse } from "@/lib/server-request-logging";
 import { createOpenAIClient } from "@/lib/openai-server";
+import { maybeParseResponse } from "openai/lib/ResponsesParser";
+import type { ResponseCreateParamsNonStreaming } from "openai/resources/responses/responses";
 import {
   buildMemegenImageUrl,
   DEFAULT_MEMEGEN_API_BASE_URL,
@@ -73,15 +75,199 @@ const DEFAULT_TEMPLATE_CANDIDATES = [
 
 const MODEL_SHORTLIST_COUNT = 8;
 const PLANNER_CANDIDATE_TARGET = 18;
+const TEMPLATE_SELECTION_SCHEMA = {
+  type: "json_schema" as const,
+  name: "meme_template_selection",
+  strict: true,
+  description: "Semantic shortlist of Memegen template ids for a post.",
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      memeAngle: { type: "string" },
+      why: { type: "string" },
+      templateIds: {
+        type: "array",
+        items: { type: "string" },
+        minItems: MODEL_SHORTLIST_COUNT,
+        maxItems: MODEL_SHORTLIST_COUNT,
+      },
+    },
+    required: ["memeAngle", "why", "templateIds"],
+  },
+};
+const MEME_PLAN_SCHEMA = {
+  type: "json_schema" as const,
+  name: "meme_plan",
+  strict: true,
+  description: "A Memegen plan with one template id and caption lines.",
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      templateId: { type: "string" },
+      title: { type: "string" },
+      why: { type: "string" },
+      lines: {
+        type: "array",
+        items: { type: "string" },
+        minItems: 1,
+        maxItems: 4,
+      },
+    },
+    required: ["templateId", "title", "why", "lines"],
+  },
+};
 
-function extractJsonObject(text: string) {
-  const fencedBlock = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-  const candidate = fencedBlock?.[1] ?? text;
-  return JSON.parse(candidate) as MemePlan;
+type ParseableTextFormat<T> = {
+  __output: T;
+  $brand: "auto-parseable-response-format";
+  $parseRaw(content: string): T;
+};
+
+function makeParseableTextFormat<T>(schema: {
+  type: "json_schema";
+  name: string;
+  strict: boolean;
+  description?: string;
+  schema: Record<string, unknown>;
+}) {
+  const format = { ...schema };
+
+  Object.defineProperties(format, {
+    $brand: {
+      value: "auto-parseable-response-format",
+      enumerable: false,
+    },
+    $parseRaw: {
+      value: (content: string) => JSON.parse(content) as T,
+      enumerable: false,
+    },
+  });
+
+  return format as typeof schema & ParseableTextFormat<T>;
+}
+
+const TEMPLATE_SELECTION_FORMAT =
+  makeParseableTextFormat<TemplateSelectionPlan>(TEMPLATE_SELECTION_SCHEMA);
+const MEME_PLAN_FORMAT = makeParseableTextFormat<MemePlan>(MEME_PLAN_SCHEMA);
+
+async function requestStructuredOutput<T>(
+  requests: Array<{
+    label: string;
+    params: ResponseCreateParamsNonStreaming;
+    summarizeInput?: string;
+    summarizeOutput?: (value: T) => string;
+  }>,
+) {
+  let lastError: Error | null = null;
+
+  for (let index = 0; index < requests.length; index += 1) {
+    const request = requests[index];
+    const startedAt = performance.now();
+
+    try {
+      const response = await createOpenAIClient().responses.create({
+        ...request.params,
+        stream: false,
+      });
+      const durationMs = Math.round((performance.now() - startedAt) * 100) / 100;
+
+      if (response.status === "incomplete") {
+        const reason = response.incomplete_details?.reason ?? "unknown";
+        logWarn(
+          "api.generate-meme.openai",
+          `${request.label} attempt=${index + 1} incomplete ${durationMs.toFixed(2)}ms`,
+          {
+            reason,
+            input: request.summarizeInput,
+          },
+        );
+        lastError = new Error(`${request.label} incomplete: ${reason}`);
+        continue;
+      }
+
+      if (response.status === "failed") {
+        const message = response.error?.message ?? "unknown";
+        throw new Error(`${request.label} failed: ${message}`);
+      }
+
+      const parsedResponse = maybeParseResponse(response, request.params);
+      const parsed = parsedResponse.output_parsed as T | null;
+
+      if (parsed !== null) {
+        logInfo(
+          "api.generate-meme.openai",
+          `${request.label} attempt=${index + 1} ${durationMs.toFixed(2)}ms`,
+          {
+            input: request.summarizeInput,
+            output: request.summarizeOutput?.(parsed),
+          },
+        );
+        return parsed;
+      }
+
+      lastError = new Error(`${request.label} returned no parsed output.`);
+    } catch (error) {
+      const durationMs = Math.round((performance.now() - startedAt) * 100) / 100;
+      logWarn(
+        "api.generate-meme.openai",
+        `${request.label} attempt=${index + 1} failed ${durationMs.toFixed(2)}ms`,
+        {
+          input: request.summarizeInput,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
+  }
+
+  throw lastError ?? new Error("Structured output request failed.");
 }
 
 function sanitizeLine(value: string) {
   return value.replace(/\s+/g, " ").trim().slice(0, 42);
+}
+
+function summarizeText(value: string, maxLength: number) {
+  const collapsed = value.replace(/\s+/g, " ").trim();
+
+  if (collapsed.length <= maxLength) {
+    return collapsed;
+  }
+
+  return `${collapsed.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+function summarizeOpenAIInput(input: {
+  content: string;
+  direction: string;
+  tone: string;
+  templateId?: string;
+  candidateCount?: number;
+  memeAngle?: string;
+}) {
+  const parts = [
+    `post="${summarizeText(input.content, 72)}"`,
+    input.direction ? `dir="${summarizeText(input.direction, 40)}"` : null,
+    `tone=${input.tone}`,
+    input.templateId ? `template=${input.templateId}` : "template=auto",
+    typeof input.candidateCount === "number" ? `candidates=${input.candidateCount}` : null,
+    input.memeAngle ? `angle="${summarizeText(input.memeAngle, 32)}"` : null,
+  ].filter(Boolean);
+
+  return parts.join(" ");
+}
+
+function summarizeTemplateSelectionOutput(value: TemplateSelectionPlan) {
+  return `angle="${summarizeText(value.memeAngle, 32)}" ids=${value.templateIds.join(",")}`;
+}
+
+function summarizeMemePlanOutput(value: MemePlan) {
+  return `template=${value.templateId} title="${summarizeText(value.title, 28)}" lines="${value.lines
+    .filter(Boolean)
+    .map((line) => summarizeText(line, 20))
+    .join(" | ")}"`;
 }
 
 function summarizeFragment(value: string, maxWords: number, fallback: string) {
@@ -451,9 +637,6 @@ function buildPlannerPrompt(input: {
   return [
     "Choose one meme template and write tight meme copy for it.",
     "",
-    "Return only valid JSON with this shape:",
-    '{ "templateId": "...", "title": "...", "why": "...", "lines": ["...", "..."] }',
-    "",
     "Rules:",
     "- Choose exactly one template from the catalog.",
     "- The title should be a short internal label, not a social caption.",
@@ -492,9 +675,6 @@ function buildTemplateSelectionPrompt(input: {
   return [
     "Infer the meme situation from the post, then shortlist live Memegen templates that fit it.",
     "",
-    "Return only valid JSON with this shape:",
-    '{ "memeAngle": "...", "why": "...", "templateIds": ["...", "..."] }',
-    "",
     "Rules:",
     `- Return ${MODEL_SHORTLIST_COUNT} unique templateIds from the catalog.`,
     "- Base the shortlist on meme semantics, not just literal word overlap.",
@@ -513,46 +693,6 @@ function buildTemplateSelectionPrompt(input: {
     "",
     "Live template catalog:",
     catalog,
-  ].join("\n");
-}
-
-function buildTemplateSelectionRepairPrompt(input: {
-  templates: MemeTemplate[];
-  rawOutput: string;
-}) {
-  const allowedIds = input.templates.map((template) => template.id).join(", ");
-
-  return [
-    "Repair the previous meme-template shortlist into strict JSON.",
-    'Return only valid JSON with this shape: { "memeAngle": "...", "why": "...", "templateIds": ["...", "..."] }',
-    `Allowed template ids: ${allowedIds}`,
-    `Return exactly ${MODEL_SHORTLIST_COUNT} unique templateIds.`,
-    "Keep memeAngle under 18 words.",
-    "Keep why to one sentence.",
-    "",
-    "Original output:",
-    input.rawOutput,
-  ].join("\n");
-}
-
-function buildPlannerRepairPrompt(input: {
-  templates: MemeTemplate[];
-  rawOutput: string;
-}) {
-  const allowedIds = input.templates.map((template) => template.id).join(", ");
-
-  return [
-    "Convert the previous meme-planner output into strict JSON.",
-    'Return only valid JSON with this shape: { "templateId": "...", "title": "...", "why": "...", "lines": ["...", "..."] }',
-    `Allowed template ids: ${allowedIds}`,
-    "Rules:",
-    "- Keep templateId to one allowed value only.",
-    "- Keep each non-empty line under 42 characters.",
-    "- Preserve the original intent if possible.",
-    "- If the original output is unusable, infer the best valid JSON from it.",
-    "",
-    "Original output:",
-    input.rawOutput,
   ].join("\n");
 }
 
@@ -664,91 +804,99 @@ export async function POST(request: Request) {
   }
 
   try {
-    const openai = createOpenAIClient();
     let templateSelection: TemplateSelectionPlan | null = null;
     let candidateTemplates = heuristicTemplates;
 
     if (!rawTemplateId) {
       try {
-        const templateSelectionResponse = await openai.responses.create({
-          model,
-          max_output_tokens: 400,
-          reasoning: { effort: reasoningEffort },
-          input: [
+        templateSelection = normalizeTemplateSelectionPlan(
+          await requestStructuredOutput<TemplateSelectionPlan>([
             {
-              role: "system",
-              content: [
-                {
-                  type: "input_text",
-                  text: "You shortlist live memegen templates. Return strict JSON only.",
+              label: "Template selector",
+              summarizeInput: summarizeOpenAIInput({
+                content: rawContent,
+                direction: rawDirection,
+                tone,
+              }),
+              summarizeOutput: summarizeTemplateSelectionOutput,
+              params: {
+                model,
+                max_output_tokens: 600,
+                reasoning: { effort: reasoningEffort },
+                text: {
+                  format: TEMPLATE_SELECTION_FORMAT,
                 },
-              ],
-            },
-            {
-              role: "user",
-              content: [
-                {
-                  type: "input_text",
-                  text: buildTemplateSelectionPrompt({
-                    templates,
-                    content: rawContent,
-                    direction: rawDirection,
-                    tonePrompt: getTonePrompt(tone),
-                  }),
-                },
-              ],
-            },
-          ],
-        });
-
-        try {
-          templateSelection = normalizeTemplateSelectionPlan(
-            extractJsonObject(templateSelectionResponse.output_text.trim()),
-          );
-        } catch (selectionParseError) {
-          logWarn(
-            "api.generate-meme",
-            "Template selector output invalid, attempting repair",
-            {
-              requestId,
-              tone,
-              error: selectionParseError,
-            },
-          );
-
-          const repairSelectionResponse = await openai.responses.create({
-            model,
-            max_output_tokens: 250,
-            reasoning: { effort: "low" },
-            input: [
-              {
-                role: "system",
-                content: [
+                input: [
                   {
-                    type: "input_text",
-                    text: "You repair malformed meme template shortlists into strict JSON.",
+                    role: "system",
+                    content: [
+                      {
+                        type: "input_text",
+                        text: "You shortlist live memegen templates. Return strict JSON only.",
+                      },
+                    ],
+                  },
+                  {
+                    role: "user",
+                    content: [
+                      {
+                        type: "input_text",
+                        text: buildTemplateSelectionPrompt({
+                          templates,
+                          content: rawContent,
+                          direction: rawDirection,
+                          tonePrompt: getTonePrompt(tone),
+                        }),
+                      },
+                    ],
                   },
                 ],
               },
-              {
-                role: "user",
-                content: [
+            },
+            {
+              label: "Template selector retry",
+              summarizeInput: summarizeOpenAIInput({
+                content: rawContent,
+                direction: rawDirection,
+                tone,
+              }),
+              summarizeOutput: summarizeTemplateSelectionOutput,
+              params: {
+                model,
+                max_output_tokens: 1200,
+                reasoning: { effort: "low" },
+                text: {
+                  format: TEMPLATE_SELECTION_FORMAT,
+                },
+                input: [
                   {
-                    type: "input_text",
-                    text: buildTemplateSelectionRepairPrompt({
-                      templates,
-                      rawOutput: templateSelectionResponse.output_text.trim(),
-                    }),
+                    role: "system",
+                    content: [
+                      {
+                        type: "input_text",
+                        text: "You shortlist live memegen templates. Return strict JSON only.",
+                      },
+                    ],
+                  },
+                  {
+                    role: "user",
+                    content: [
+                      {
+                        type: "input_text",
+                        text: buildTemplateSelectionPrompt({
+                          templates,
+                          content: rawContent,
+                          direction: rawDirection,
+                          tonePrompt: getTonePrompt(tone),
+                        }),
+                      },
+                    ],
                   },
                 ],
               },
-            ],
-          });
-
-          templateSelection = normalizeTemplateSelectionPlan(
-            extractJsonObject(repairSelectionResponse.output_text.trim()),
-          );
-        }
+            },
+          ]),
+        );
 
         candidateTemplates = mergeTemplateCandidates(
           templates,
@@ -757,107 +905,123 @@ export async function POST(request: Request) {
         );
       } catch (selectionError) {
         logWarn("api.generate-meme", "Template selection failed, using heuristic shortlist", {
-          requestId,
           tone,
-          error: selectionError,
+          error:
+            selectionError instanceof Error
+              ? selectionError.message
+              : String(selectionError),
         });
         candidateTemplates = heuristicTemplates;
       }
     }
 
-    const response = await openai.responses.create({
+    const plan = await requestStructuredOutput<MemePlan>([
+      {
+        label: "Meme planner",
+        summarizeInput: summarizeOpenAIInput({
+          content: rawContent,
+          direction: rawDirection,
+          tone,
+          templateId: rawTemplateId || undefined,
+          candidateCount: candidateTemplates.length,
+          memeAngle: templateSelection?.memeAngle,
+        }),
+        summarizeOutput: summarizeMemePlanOutput,
+        params: {
+          model,
+          max_output_tokens: 700,
+          reasoning: { effort: reasoningEffort },
+          text: {
+            format: MEME_PLAN_FORMAT,
+          },
+          input: [
+            {
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: "You write meme captions for memegen templates. Return strict JSON only.",
+                },
+              ],
+            },
+            {
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: buildPlannerPrompt({
+                    templates: candidateTemplates,
+                    content: rawContent,
+                    direction: rawDirection,
+                    tonePrompt: getTonePrompt(tone),
+                    templateOverride: rawTemplateId,
+                    memeAngle: templateSelection?.memeAngle,
+                    templateSelectionWhy: templateSelection?.why,
+                  }),
+                },
+              ],
+            },
+          ],
+        },
+      },
+      {
+        label: "Meme planner retry",
+        summarizeInput: summarizeOpenAIInput({
+          content: rawContent,
+          direction: rawDirection,
+          tone,
+          templateId: rawTemplateId || undefined,
+          candidateCount: candidateTemplates.length,
+          memeAngle: templateSelection?.memeAngle,
+        }),
+        summarizeOutput: summarizeMemePlanOutput,
+        params: {
+          model,
+          max_output_tokens: 1200,
+          reasoning: { effort: "low" },
+          text: {
+            format: MEME_PLAN_FORMAT,
+          },
+          input: [
+            {
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: "You write meme captions for memegen templates. Return strict JSON only.",
+                },
+              ],
+            },
+            {
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: buildPlannerPrompt({
+                    templates: candidateTemplates,
+                    content: rawContent,
+                    direction: rawDirection,
+                    tonePrompt: getTonePrompt(tone),
+                    templateOverride: rawTemplateId,
+                    memeAngle: templateSelection?.memeAngle,
+                    templateSelectionWhy: templateSelection?.why,
+                  }),
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ]);
+
+    const result = buildMemeResult(
+      templates,
+      plan,
+      requestId,
+      rawTemplateId,
       model,
-      max_output_tokens: 500,
-      reasoning: { effort: reasoningEffort },
-      input: [
-        {
-          role: "system",
-          content: [
-            {
-              type: "input_text",
-              text: "You write meme captions for memegen templates. Return strict JSON only.",
-            },
-          ],
-        },
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: buildPlannerPrompt({
-                templates: candidateTemplates,
-                content: rawContent,
-                direction: rawDirection,
-                tonePrompt: getTonePrompt(tone),
-                templateOverride: rawTemplateId,
-                memeAngle: templateSelection?.memeAngle,
-                templateSelectionWhy: templateSelection?.why,
-              }),
-            },
-          ],
-        },
-      ],
-    });
-
-    let result: ResolvedMemeResult;
-
-    try {
-      const plan = extractJsonObject(response.output_text.trim());
-      result = buildMemeResult(
-        templates,
-        plan,
-        requestId,
-        rawTemplateId,
-        model,
-        reasoningEffort,
-      );
-    } catch (plannerError) {
-      logWarn("api.generate-meme", "Meme planner output invalid, attempting repair", {
-        requestId,
-        tone,
-        templateId: rawTemplateId || undefined,
-        error: plannerError,
-      });
-
-      const repairResponse = await openai.responses.create({
-        model,
-        max_output_tokens: 300,
-        reasoning: { effort: "low" },
-        input: [
-          {
-            role: "system",
-            content: [
-              {
-                type: "input_text",
-                text: "You repair malformed meme planner output into strict JSON.",
-              },
-            ],
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: buildPlannerRepairPrompt({
-                  templates: candidateTemplates,
-                  rawOutput: response.output_text.trim(),
-                }),
-              },
-            ],
-          },
-        ],
-      });
-
-      const repairedPlan = extractJsonObject(repairResponse.output_text.trim());
-      result = buildMemeResult(
-        templates,
-        repairedPlan,
-        requestId,
-        rawTemplateId,
-        model,
-        reasoningEffort,
-      );
-    }
+      reasoningEffort,
+    );
 
     return finalizeJsonResponse(
       "api.generate-meme",
@@ -876,10 +1040,9 @@ export async function POST(request: Request) {
     );
   } catch (error) {
     logWarn("api.generate-meme", "Meme planning failed, using fallback", {
-      requestId,
       tone,
       templateId: rawTemplateId || undefined,
-      error,
+      error: error instanceof Error ? error.message : String(error),
     });
 
     try {
@@ -911,10 +1074,12 @@ export async function POST(request: Request) {
       );
     } catch (fallbackError) {
       logError("api.generate-meme", "Meme fallback failed", {
-        requestId,
         tone,
         templateId: rawTemplateId || undefined,
-        error: fallbackError,
+        error:
+          fallbackError instanceof Error
+            ? fallbackError.message
+            : String(fallbackError),
       });
 
       return finalizeJsonResponse(

@@ -17,15 +17,41 @@ function getDurationMs(startedAt: number) {
   return Math.round((performance.now() - startedAt) * 100) / 100;
 }
 
-export function logIncomingRequest(
-  scope: string,
-  request: Request,
-  metadata?: RequestLogMetadata,
-) {
-  logInfo(scope, "Incoming request", {
-    ...getRequestContext(request),
-    ...metadata,
-  });
+function stringifyDetail(value: unknown) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  if (typeof value === "number") {
+    return Number.isInteger(value) ? String(value) : value.toFixed(2);
+  }
+
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+
+  return String(value);
+}
+
+function buildDetailSuffix(metadata?: RequestLogMetadata, keys: string[] = []) {
+  if (!metadata) {
+    return "";
+  }
+
+  const parts = keys
+    .map((key) => {
+      const value = stringifyDetail(metadata[key]);
+      return value ? `${key}=${value}` : null;
+    })
+    .filter((value): value is string => Boolean(value));
+
+  return parts.length > 0 ? ` ${parts.join(" ")}` : "";
+}
+
+export function logIncomingRequest(scope: string, request: Request) {
+  const { method, pathname, search } = getRequestContext(request);
+  const route = `${pathname}${search ?? ""}`;
+  logInfo(scope, `${method} ${route}`);
 }
 
 export function logCompletedRequest(
@@ -35,12 +61,19 @@ export function logCompletedRequest(
   status: number,
   metadata?: RequestLogMetadata,
 ) {
-  logInfo(scope, "Request completed", {
-    ...getRequestContext(request),
-    status,
-    durationMs: getDurationMs(startedAt),
-    ...metadata,
-  });
+  const { method, pathname, search } = getRequestContext(request);
+  const route = `${pathname}${search ?? ""}`;
+  const durationMs = getDurationMs(startedAt);
+  const summary = `${method} ${route} ${status} ${durationMs.toFixed(2)}ms`;
+  const detailKeys = [
+    "templateId",
+    "tone",
+    "model",
+    "reasoningEffort",
+    "fallback",
+  ];
+
+  logInfo(scope, `${summary}${buildDetailSuffix(metadata, detailKeys)}`);
 }
 
 export function finalizeJsonResponse(
