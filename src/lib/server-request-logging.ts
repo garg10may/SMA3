@@ -67,6 +67,7 @@ export function logCompletedRequest(
   const summary = `${method} ${route} ${status} ${durationMs.toFixed(2)}ms`;
   const detailKeys = [
     "templateId",
+    "reactionIds",
     "tone",
     "model",
     "reasoningEffort",

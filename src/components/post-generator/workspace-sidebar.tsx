@@ -22,7 +22,7 @@ const agentWorkspaces = [
     value: "meme",
     label: "Meme Generator",
     helper:
-      "Choose a memegen template, write the caption, and preview the result.",
+      "Choose a memegen template or reaction image, write the caption, and preview the result.",
   },
 ] as const;
 

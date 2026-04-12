@@ -1,6 +1,10 @@
 import type { MediumImageStyleOption } from "@/lib/medium-image";
 import type { MemeTemplate } from "@/lib/meme-agent";
 import type {
+  ReactionCatalogEntry,
+  ReactionIntensity,
+} from "@/lib/reaction-catalog";
+import type {
   ImageModelOption,
   ImageQualityOption,
   PlatformOption,
@@ -141,6 +145,42 @@ export type MemeTemplatesResponse = {
   templates: MemeTemplate[];
   count: number;
   usingFallback: boolean;
+  requestId?: string;
+};
+
+export type ReactionVariant = {
+  reaction: {
+    id: string;
+    name: string;
+    intensity: ReactionIntensity;
+    helper: string;
+    emotionTags: string[];
+    situationTags: string[];
+  };
+  title: string;
+  rationale: string;
+  caption: string;
+  imageUrl: string;
+  sourceImageUrl: string;
+};
+
+export type ReactionResult = {
+  format: "reaction";
+  variants: ReactionVariant[];
+  model: TextModelOption;
+  reasoningEffort: ReasoningEffortOption;
+  requestId?: string;
+};
+
+export type ReactionResponse = ReactionResult;
+
+export type ReactionCatalogResponse = {
+  items: ReactionCatalogEntry[];
+  count: number;
+  total: number;
+  query: string;
+  source: "local";
+  fallback: boolean;
   requestId?: string;
 };
 
