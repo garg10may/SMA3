@@ -32,6 +32,12 @@ type MemePlan = {
   lines: string[];
 };
 
+type TemplateSelectionPlan = {
+  memeAngle: string;
+  why: string;
+  templateIds: string[];
+};
+
 type ResolvedMemeResult = {
   format: "meme";
   template: {
@@ -64,6 +70,9 @@ const DEFAULT_TEMPLATE_CANDIDATES = [
   "spongebob",
   "facepalm",
 ] as const;
+
+const MODEL_SHORTLIST_COUNT = 8;
+const PLANNER_CANDIDATE_TARGET = 18;
 
 function extractJsonObject(text: string) {
   const fencedBlock = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
@@ -109,6 +118,16 @@ function describeTemplate(template: MemeTemplate) {
   return `${template.lines} line${template.lines === 1 ? "" : "s"} · keywords: ${keywordSummary}`;
 }
 
+function describeTemplateForSelector(template: MemeTemplate) {
+  const keywordSummary =
+    template.keywords.length > 0 ? template.keywords.slice(0, 6).join(", ") : "general reaction";
+  const sourceSummary = template.source?.trim() ? template.source.trim() : "unknown";
+
+  return `${template.id} | ${template.name} | ${template.lines} line${
+    template.lines === 1 ? "" : "s"
+  } | keywords: ${keywordSummary} | source: ${sourceSummary}`;
+}
+
 function tokenize(value: string) {
   return value
     .toLowerCase()
@@ -150,7 +169,7 @@ function scoreTemplate(template: MemeTemplate, tokens: string[]) {
   return score;
 }
 
-function selectTemplateCandidates(
+function selectHeuristicTemplateCandidates(
   templates: MemeTemplate[],
   content: string,
   direction: string,
@@ -198,6 +217,61 @@ function selectTemplateCandidates(
   }
 
   return Array.from(selected.values());
+}
+
+function normalizeTemplateSelectionPlan(value: unknown): TemplateSelectionPlan {
+  if (typeof value !== "object" || value === null) {
+    throw new Error("Template selector output must be an object.");
+  }
+
+  const memeAngle =
+    "memeAngle" in value && typeof value.memeAngle === "string"
+      ? value.memeAngle.trim()
+      : "";
+  const why =
+    "why" in value && typeof value.why === "string" ? value.why.trim() : "";
+  const templateIds =
+    "templateIds" in value && Array.isArray(value.templateIds)
+      ? value.templateIds
+          .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+          .filter(Boolean)
+      : [];
+
+  if (!memeAngle || !why || templateIds.length === 0) {
+    throw new Error("Template selector output is missing required fields.");
+  }
+
+  return {
+    memeAngle,
+    why,
+    templateIds: Array.from(new Set(templateIds)),
+  };
+}
+
+function mergeTemplateCandidates(
+  templates: MemeTemplate[],
+  preferredTemplateIds: string[],
+  heuristicTemplates: MemeTemplate[],
+) {
+  const merged = new Map<string, MemeTemplate>();
+
+  for (const templateId of preferredTemplateIds) {
+    const template = templates.find((entry) => entry.id === templateId);
+
+    if (template) {
+      merged.set(template.id, template);
+    }
+  }
+
+  for (const template of heuristicTemplates) {
+    if (merged.size >= PLANNER_CANDIDATE_TARGET) {
+      break;
+    }
+
+    merged.set(template.id, template);
+  }
+
+  return Array.from(merged.values());
 }
 
 function chooseFallbackTemplate(
@@ -349,6 +423,8 @@ function buildPlannerPrompt(input: {
   direction: string;
   tonePrompt: string;
   templateOverride: string;
+  memeAngle?: string;
+  templateSelectionWhy?: string;
 }) {
   const catalog = input.templates
     .map(
@@ -360,6 +436,17 @@ function buildPlannerPrompt(input: {
   const overrideLine = input.templateOverride
     ? `Template override: You must use template "${input.templateOverride}".`
     : "Template override: none. Choose the best fit from the catalog.";
+  const selectorContext = input.memeAngle
+    ? [
+        `Selector read on the post:\n${input.memeAngle}`,
+        "",
+        input.templateSelectionWhy
+          ? `Why these candidates were shortlisted:\n${input.templateSelectionWhy}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : "Selector read on the post:\nNone";
 
   return [
     "Choose one meme template and write tight meme copy for it.",
@@ -385,10 +472,66 @@ function buildPlannerPrompt(input: {
       ? `Extra direction:\n${input.direction}`
       : "Extra direction:\nNone",
     "",
+    selectorContext,
+    "",
     `Tone:\n${input.tonePrompt}`,
     "",
     "Template catalog:",
     catalog,
+  ].join("\n");
+}
+
+function buildTemplateSelectionPrompt(input: {
+  templates: MemeTemplate[];
+  content: string;
+  direction: string;
+  tonePrompt: string;
+}) {
+  const catalog = input.templates.map(describeTemplateForSelector).join("\n");
+
+  return [
+    "Infer the meme situation from the post, then shortlist live Memegen templates that fit it.",
+    "",
+    "Return only valid JSON with this shape:",
+    '{ "memeAngle": "...", "why": "...", "templateIds": ["...", "..."] }',
+    "",
+    "Rules:",
+    `- Return ${MODEL_SHORTLIST_COUNT} unique templateIds from the catalog.`,
+    "- Base the shortlist on meme semantics, not just literal word overlap.",
+    "- Prefer broadly recognizable, strong-fit templates over obscure ones unless the match is clearly better.",
+    "- Include templates that would give the caption writer distinct comedic angles, not near-duplicates only.",
+    "- Keep memeAngle under 18 words.",
+    "- Keep why to one sentence.",
+    "",
+    `Post context:\n${input.content}`,
+    "",
+    input.direction
+      ? `Extra direction:\n${input.direction}`
+      : "Extra direction:\nNone",
+    "",
+    `Tone:\n${input.tonePrompt}`,
+    "",
+    "Live template catalog:",
+    catalog,
+  ].join("\n");
+}
+
+function buildTemplateSelectionRepairPrompt(input: {
+  templates: MemeTemplate[];
+  rawOutput: string;
+}) {
+  const allowedIds = input.templates.map((template) => template.id).join(", ");
+
+  return [
+    "Repair the previous meme-template shortlist into strict JSON.",
+    'Return only valid JSON with this shape: { "memeAngle": "...", "why": "...", "templateIds": ["...", "..."] }',
+    `Allowed template ids: ${allowedIds}`,
+    `Return exactly ${MODEL_SHORTLIST_COUNT} unique templateIds.`,
+    "Keep memeAngle under 18 words.",
+    "Keep why to one sentence.",
+    "",
+    "Original output:",
+    input.rawOutput,
   ].join("\n");
 }
 
@@ -499,7 +642,7 @@ export async function POST(request: Request) {
     ? rawReasoningEffort
     : DEFAULT_REASONING_EFFORT;
   const templates = await getMemeTemplateCatalog();
-  const candidateTemplates = selectTemplateCandidates(
+  const heuristicTemplates = selectHeuristicTemplateCandidates(
     templates,
     rawContent,
     rawDirection,
@@ -522,6 +665,106 @@ export async function POST(request: Request) {
 
   try {
     const openai = createOpenAIClient();
+    let templateSelection: TemplateSelectionPlan | null = null;
+    let candidateTemplates = heuristicTemplates;
+
+    if (!rawTemplateId) {
+      try {
+        const templateSelectionResponse = await openai.responses.create({
+          model,
+          max_output_tokens: 400,
+          reasoning: { effort: reasoningEffort },
+          input: [
+            {
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: "You shortlist live memegen templates. Return strict JSON only.",
+                },
+              ],
+            },
+            {
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: buildTemplateSelectionPrompt({
+                    templates,
+                    content: rawContent,
+                    direction: rawDirection,
+                    tonePrompt: getTonePrompt(tone),
+                  }),
+                },
+              ],
+            },
+          ],
+        });
+
+        try {
+          templateSelection = normalizeTemplateSelectionPlan(
+            extractJsonObject(templateSelectionResponse.output_text.trim()),
+          );
+        } catch (selectionParseError) {
+          logWarn(
+            "api.generate-meme",
+            "Template selector output invalid, attempting repair",
+            {
+              requestId,
+              tone,
+              error: selectionParseError,
+            },
+          );
+
+          const repairSelectionResponse = await openai.responses.create({
+            model,
+            max_output_tokens: 250,
+            reasoning: { effort: "low" },
+            input: [
+              {
+                role: "system",
+                content: [
+                  {
+                    type: "input_text",
+                    text: "You repair malformed meme template shortlists into strict JSON.",
+                  },
+                ],
+              },
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "input_text",
+                    text: buildTemplateSelectionRepairPrompt({
+                      templates,
+                      rawOutput: templateSelectionResponse.output_text.trim(),
+                    }),
+                  },
+                ],
+              },
+            ],
+          });
+
+          templateSelection = normalizeTemplateSelectionPlan(
+            extractJsonObject(repairSelectionResponse.output_text.trim()),
+          );
+        }
+
+        candidateTemplates = mergeTemplateCandidates(
+          templates,
+          templateSelection.templateIds,
+          heuristicTemplates,
+        );
+      } catch (selectionError) {
+        logWarn("api.generate-meme", "Template selection failed, using heuristic shortlist", {
+          requestId,
+          tone,
+          error: selectionError,
+        });
+        candidateTemplates = heuristicTemplates;
+      }
+    }
+
     const response = await openai.responses.create({
       model,
       max_output_tokens: 500,
@@ -547,6 +790,8 @@ export async function POST(request: Request) {
                 direction: rawDirection,
                 tonePrompt: getTonePrompt(tone),
                 templateOverride: rawTemplateId,
+                memeAngle: templateSelection?.memeAngle,
+                templateSelectionWhy: templateSelection?.why,
               }),
             },
           ],
