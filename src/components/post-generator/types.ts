@@ -113,8 +113,7 @@ export type GenerateResponse = XResponse | MediumResult;
 export type ShortCreateResponse = ShortResult;
 export type ShortStatusResponse = ShortJob;
 
-export type MemeResult = {
-  format: "meme";
+export type MemeVariant = {
   template: {
     id: string;
     name: string;
@@ -126,6 +125,11 @@ export type MemeResult = {
   lines: string[];
   imageUrl: string;
   blankUrl: string;
+};
+
+export type MemeResult = {
+  format: "meme";
+  variants: MemeVariant[];
   model: TextModelOption;
   reasoningEffort: ReasoningEffortOption;
   requestId?: string;

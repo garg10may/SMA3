@@ -33,14 +33,17 @@ type MemePlan = {
   lines: string[];
 };
 
+type MemePlanBatch = {
+  variants: MemePlan[];
+};
+
 type TemplateSelectionPlan = {
   memeAngle: string;
   why: string;
   templateIds: string[];
 };
 
-type ResolvedMemeResult = {
-  format: "meme";
+type ResolvedMemeVariant = {
   template: {
     id: string;
     name: string;
@@ -52,6 +55,11 @@ type ResolvedMemeResult = {
   lines: string[];
   imageUrl: string;
   blankUrl: string;
+};
+
+type ResolvedMemeResult = {
+  format: "meme";
+  variants: ResolvedMemeVariant[];
   model: TextModelOption;
   reasoningEffort: ReasoningEffortOption;
   requestId: string;
@@ -74,6 +82,7 @@ const DEFAULT_TEMPLATE_CANDIDATES = [
 
 const MODEL_SHORTLIST_COUNT = 8;
 const PLANNER_CANDIDATE_TARGET = 18;
+const MEME_VARIANT_COUNT = 3;
 const TEMPLATE_SELECTION_SCHEMA = {
   type: "json_schema" as const,
   name: "meme_template_selection",
@@ -97,26 +106,213 @@ const TEMPLATE_SELECTION_SCHEMA = {
 };
 const MEME_PLAN_SCHEMA = {
   type: "json_schema" as const,
-  name: "meme_plan",
+  name: "meme_plan_batch",
   strict: true,
-  description: "A Memegen plan with one template id and caption lines.",
+  description: "One or more Memegen variants with template ids and caption lines.",
   schema: {
     type: "object",
     additionalProperties: false,
     properties: {
-      templateId: { type: "string" },
-      title: { type: "string" },
-      why: { type: "string" },
-      lines: {
+      variants: {
         type: "array",
-        items: { type: "string" },
         minItems: 1,
-        maxItems: 4,
+        maxItems: MEME_VARIANT_COUNT,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            templateId: { type: "string" },
+            title: { type: "string" },
+            why: { type: "string" },
+            lines: {
+              type: "array",
+              items: { type: "string" },
+              minItems: 1,
+              maxItems: 4,
+            },
+          },
+          required: ["templateId", "title", "why", "lines"],
+        },
       },
     },
-    required: ["templateId", "title", "why", "lines"],
+    required: ["variants"],
   },
 };
+
+function getDesiredVariantCount(templateOverride: string) {
+  return templateOverride ? 1 : MEME_VARIANT_COUNT;
+}
+
+function normalizeMemePlanBatch(
+  value: unknown,
+  desiredVariantCount: number,
+): MemePlanBatch {
+  if (typeof value !== "object" || value === null) {
+    throw new Error("Meme planner output must be an object.");
+  }
+
+  const variants =
+    "variants" in value && Array.isArray(value.variants)
+      ? value.variants
+          .map((entry) => {
+            if (typeof entry !== "object" || entry === null) {
+              return null;
+            }
+
+            const templateId =
+              "templateId" in entry && typeof entry.templateId === "string"
+                ? entry.templateId.trim()
+                : "";
+            const title =
+              "title" in entry && typeof entry.title === "string"
+                ? entry.title.trim()
+                : "";
+            const why =
+              "why" in entry && typeof entry.why === "string"
+                ? entry.why.trim()
+                : "";
+            const lines =
+              "lines" in entry && Array.isArray(entry.lines)
+                ? entry.lines
+                    .map((line: unknown) =>
+                      typeof line === "string" ? line.trim() : "",
+                    )
+                    .filter((line: string) => line.length > 0)
+                : [];
+
+            if (!templateId || !title || !why || lines.length === 0) {
+              return null;
+            }
+
+            return { templateId, title, why, lines };
+          })
+          .filter((entry): entry is MemePlan => entry !== null)
+      : [];
+
+  if (variants.length < desiredVariantCount) {
+    throw new Error("Meme planner returned too few variants.");
+  }
+
+  const uniqueVariants: MemePlan[] = [];
+
+  for (const variant of variants) {
+    if (
+      uniqueVariants.some(
+        (entry) => entry.templateId.toLowerCase() === variant.templateId.toLowerCase(),
+      )
+    ) {
+      continue;
+    }
+
+    uniqueVariants.push(variant);
+
+    if (uniqueVariants.length >= desiredVariantCount) {
+      break;
+    }
+  }
+
+  if (uniqueVariants.length < desiredVariantCount) {
+    throw new Error("Meme planner returned duplicate templates.");
+  }
+
+  return {
+    variants: uniqueVariants,
+  };
+}
+
+function summarizeMemePlanOutput(value: MemePlanBatch) {
+  return `templates=${value.variants.map((variant) => variant.templateId).join(",")} titles="${value.variants
+    .map((variant) => summarizeText(variant.title, 18))
+    .join(" | ")}"`;
+}
+
+function buildFallbackPlanBatch(
+  templates: MemeTemplate[],
+  content: string,
+  templateOverride: string,
+) {
+  if (templateOverride) {
+    return { variants: [buildFallbackPlan(templates, content, templateOverride)] };
+  }
+
+  const primaryFallbackTemplate = chooseFallbackTemplate(templates, content, "");
+  const preferredTemplateIds = [
+    primaryFallbackTemplate?.id ?? "",
+    ...DEFAULT_TEMPLATE_CANDIDATES,
+  ];
+  const variants: MemePlan[] = [];
+
+  for (const templateId of preferredTemplateIds) {
+    if (variants.length >= MEME_VARIANT_COUNT) {
+      break;
+    }
+
+    const template = templates.find((entry) => entry.id === templateId);
+
+    if (!template) {
+      continue;
+    }
+
+    const plan = buildFallbackPlan(templates, content, template.id);
+
+    if (!variants.some((entry) => entry.templateId === plan.templateId)) {
+      variants.push(plan);
+    }
+  }
+
+  if (variants.length === 0) {
+    throw new Error("No fallback meme variants are available.");
+  }
+
+  return { variants };
+}
+
+function buildMemeVariant(
+  templates: MemeTemplate[],
+  plan: MemePlan,
+  templateOverride: string,
+) {
+  const templateId =
+    templateOverride && templates.some((template) => template.id === templateOverride)
+      ? templateOverride
+      : templates.some((template) => template.id === plan.templateId)
+        ? plan.templateId
+        : "";
+
+  if (!templateId) {
+    throw new Error("The planner returned an unknown meme template.");
+  }
+
+  const template = templates.find((entry) => entry.id === templateId) ?? null;
+
+  if (!template) {
+    throw new Error("The selected meme template is missing from the catalog.");
+  }
+
+  const lines = normalizeMemeLines(
+    Array.isArray(plan.lines)
+      ? plan.lines.map((line) => sanitizeLine(String(line)))
+      : [],
+    template.lines,
+  );
+
+  return {
+    template: {
+      id: template.id,
+      name: template.name,
+      lineCount: template.lines,
+      helper: describeTemplate(template),
+    },
+    title: plan.title?.trim() || template.name,
+    rationale: plan.why?.trim() || describeTemplate(template),
+    lines,
+    imageUrl: buildMemegenImageUrl(template.id, lines, {
+      width: 1200,
+      font: "impact",
+    }),
+    blankUrl: getMemeTemplateBlankUrl(template.id),
+  };
+}
 
 type ParseableTextFormat<T> = {
   __output: T;
@@ -149,7 +345,7 @@ function makeParseableTextFormat<T>(schema: {
 
 const TEMPLATE_SELECTION_FORMAT =
   makeParseableTextFormat<TemplateSelectionPlan>(TEMPLATE_SELECTION_SCHEMA);
-const MEME_PLAN_FORMAT = makeParseableTextFormat<MemePlan>(MEME_PLAN_SCHEMA);
+const MEME_PLAN_FORMAT = makeParseableTextFormat<MemePlanBatch>(MEME_PLAN_SCHEMA);
 
 async function requestStructuredOutput<T>(
   requests: Array<{
@@ -260,13 +456,6 @@ function summarizeOpenAIInput(input: {
 
 function summarizeTemplateSelectionOutput(value: TemplateSelectionPlan) {
   return `angle="${summarizeText(value.memeAngle, 32)}" ids=${value.templateIds.join(",")}`;
-}
-
-function summarizeMemePlanOutput(value: MemePlan) {
-  return `template=${value.templateId} title="${summarizeText(value.title, 28)}" lines="${value.lines
-    .filter(Boolean)
-    .map((line) => summarizeText(line, 20))
-    .join(" | ")}"`;
 }
 
 function summarizeFragment(value: string, maxWords: number, fallback: string) {
@@ -547,53 +736,18 @@ function buildFallbackPlan(
 
 function buildMemeResult(
   templates: MemeTemplate[],
-  plan: MemePlan,
+  planBatch: MemePlanBatch,
   requestId: string,
   templateOverride: string,
   model: TextModelOption,
   reasoningEffort: ReasoningEffortOption,
   fallback = false,
 ): ResolvedMemeResult {
-  const templateId =
-    templateOverride && templates.some((template) => template.id === templateOverride)
-      ? templateOverride
-      : templates.some((template) => template.id === plan.templateId)
-        ? plan.templateId
-        : "";
-
-  if (!templateId) {
-    throw new Error("The planner returned an unknown meme template.");
-  }
-
-  const template = templates.find((entry) => entry.id === templateId) ?? null;
-
-  if (!template) {
-    throw new Error("The selected meme template is missing from the catalog.");
-  }
-
-  const lines = normalizeMemeLines(
-    Array.isArray(plan.lines)
-      ? plan.lines.map((line) => sanitizeLine(String(line)))
-      : [],
-    template.lines,
-  );
-
   return {
     format: "meme",
-    template: {
-      id: template.id,
-      name: template.name,
-      lineCount: template.lines,
-      helper: describeTemplate(template),
-    },
-    title: plan.title?.trim() || template.name,
-    rationale: plan.why?.trim() || describeTemplate(template),
-    lines,
-    imageUrl: buildMemegenImageUrl(template.id, lines, {
-      width: 1200,
-      font: "impact",
-    }),
-    blankUrl: getMemeTemplateBlankUrl(template.id),
+    variants: planBatch.variants.map((plan) =>
+      buildMemeVariant(templates, plan, templateOverride),
+    ),
     model,
     reasoningEffort,
     requestId,
@@ -619,7 +773,13 @@ function buildPlannerPrompt(input: {
 
   const overrideLine = input.templateOverride
     ? `Template override: You must use template "${input.templateOverride}".`
-    : "Template override: none. Choose the best fit from the catalog.";
+    : "Template override: none. Choose the best fits from the catalog.";
+  const variantInstruction = input.templateOverride
+    ? "Create exactly 1 meme variant."
+    : `Create exactly ${MEME_VARIANT_COUNT} meme variants.`;
+  const templateInstruction = input.templateOverride
+    ? "- Use the override template for the single variant."
+    : `- Use ${MEME_VARIANT_COUNT} different templateIds across the variants.`;
   const selectorContext = input.memeAngle
     ? [
         `Selector read on the post:\n${input.memeAngle}`,
@@ -633,17 +793,22 @@ function buildPlannerPrompt(input: {
     : "Selector read on the post:\nNone";
 
   return [
-    "Choose one meme template and write tight meme copy for it.",
+    "Write tight meme copy for the candidate templates.",
     "",
     "Rules:",
-    "- Choose exactly one template from the catalog.",
+    `- ${variantInstruction}`,
+    templateInstruction,
+    "- Each variant needs templateId, title, why, and lines.",
     "- The title should be a short internal label, not a social caption.",
-    "- The why field must be one sentence explaining why the template fits.",
+    "- The why field must be one sentence explaining why that template fits.",
     "- Keep each non-empty line under 42 characters.",
-    "- Use empty strings for any intentionally blank lines.",
+    "- Use empty strings only for intentionally blank meme lines.",
     "- No hashtags, no emojis, no quotation marks around the lines unless needed for the joke.",
     "- Keep the copy internet-native and specific, not generic marketing language.",
     "- Avoid slurs, sexual content, graphic violence, or tragedy jokes.",
+    input.templateOverride
+      ? null
+      : "- Make the variants meaningfully different in comedic angle, not minor rewrites of the same joke.",
     "",
     overrideLine,
     "",
@@ -659,7 +824,9 @@ function buildPlannerPrompt(input: {
     "",
     "Template catalog:",
     catalog,
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function buildTemplateSelectionPrompt(input: {
@@ -779,6 +946,7 @@ export async function POST(request: Request) {
   const reasoningEffort = isReasoningEffortOption(rawReasoningEffort)
     ? rawReasoningEffort
     : DEFAULT_REASONING_EFFORT;
+  const desiredVariantCount = getDesiredVariantCount(rawTemplateId);
   const templates = await getMemeTemplateCatalog();
   const heuristicTemplates = selectHeuristicTemplateCandidates(
     templates,
@@ -913,7 +1081,8 @@ export async function POST(request: Request) {
       }
     }
 
-    const plan = await requestStructuredOutput<MemePlan>([
+    const planBatch = normalizeMemePlanBatch(
+      await requestStructuredOutput<MemePlanBatch>([
       {
         label: "Meme planner",
         summarizeInput: summarizeOpenAIInput({
@@ -1010,11 +1179,13 @@ export async function POST(request: Request) {
           ],
         },
       },
-    ]);
+      ]),
+      desiredVariantCount,
+    );
 
     const result = buildMemeResult(
       templates,
-      plan,
+      planBatch,
       requestId,
       rawTemplateId,
       model,
@@ -1029,7 +1200,7 @@ export async function POST(request: Request) {
       undefined,
       {
         requestId,
-        templateId: result.template.id,
+        templateId: result.variants.map((variant) => variant.template.id).join(","),
         tone,
         model,
         reasoningEffort,
@@ -1044,10 +1215,14 @@ export async function POST(request: Request) {
     });
 
     try {
-      const fallbackPlan = buildFallbackPlan(templates, rawContent, rawTemplateId);
+      const fallbackPlanBatch = buildFallbackPlanBatch(
+        templates,
+        rawContent,
+        rawTemplateId,
+      );
       const fallbackResult = buildMemeResult(
         templates,
-        fallbackPlan,
+        fallbackPlanBatch,
         requestId,
         rawTemplateId,
         model,
@@ -1066,7 +1241,9 @@ export async function POST(request: Request) {
           tone,
           model,
           reasoningEffort,
-          templateId: fallbackResult.template.id,
+          templateId: fallbackResult.variants
+            .map((variant) => variant.template.id)
+            .join(","),
           fallback: true,
         },
       );

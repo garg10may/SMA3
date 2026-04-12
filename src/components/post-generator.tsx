@@ -13,6 +13,16 @@ import { DEFAULT_PLATFORM } from "@/lib/post-config";
 export function PostGenerator() {
   const [workspace, setWorkspace] = useState<WorkspaceId>(DEFAULT_PLATFORM);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mountedWorkspaces, setMountedWorkspaces] = useState<WorkspaceId[]>([
+    DEFAULT_PLATFORM,
+  ]);
+
+  function handleSelectWorkspace(nextWorkspace: WorkspaceId) {
+    setWorkspace(nextWorkspace);
+    setMountedWorkspaces((current) =>
+      current.includes(nextWorkspace) ? current : [...current, nextWorkspace],
+    );
+  }
 
   return (
     <div className="grid gap-4 xl:grid-cols-[auto_minmax(0,1fr)]">
@@ -20,22 +30,28 @@ export function PostGenerator() {
         workspace={workspace}
         sidebarCollapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed((current) => !current)}
-        onSelectWorkspace={setWorkspace}
+        onSelectWorkspace={handleSelectWorkspace}
       />
 
       <div className="min-w-0 space-y-4">
         <ComposerPanel active={workspace === "x"}>
           <XComposer />
         </ComposerPanel>
-        <ComposerPanel active={workspace === "medium"}>
-          <MediumComposer />
-        </ComposerPanel>
-        <ComposerPanel active={workspace === "shorts"}>
-          <ShortComposer />
-        </ComposerPanel>
-        <ComposerPanel active={workspace === "meme"}>
-          <MemeComposer />
-        </ComposerPanel>
+        {mountedWorkspaces.includes("medium") ? (
+          <ComposerPanel active={workspace === "medium"}>
+            <MediumComposer />
+          </ComposerPanel>
+        ) : null}
+        {mountedWorkspaces.includes("shorts") ? (
+          <ComposerPanel active={workspace === "shorts"}>
+            <ShortComposer />
+          </ComposerPanel>
+        ) : null}
+        {mountedWorkspaces.includes("meme") ? (
+          <ComposerPanel active={workspace === "meme"}>
+            <MemeComposer />
+          </ComposerPanel>
+        ) : null}
       </div>
     </div>
   );

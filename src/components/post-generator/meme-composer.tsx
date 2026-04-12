@@ -49,14 +49,19 @@ export function MemeComposer() {
   const [templatesLoaded, setTemplatesLoaded] = useState(false);
   const [usingFallbackTemplates, setUsingFallbackTemplates] = useState(false);
   const [result, setResult] = useState<MemeResult | null>(null);
+  const [activeVariantIndex, setActiveVariantIndex] = useState(0);
   const [error, setError] = useState("");
   const [templateError, setTemplateError] = useState("");
   const [isPending, startTransition] = useTransition();
   const { copyState, markCopied, resetCopyState } = useCopyFeedback();
 
   const contentRemaining = MAX_BRIEF_LENGTH - content.length;
+  const activeVariant =
+    (result && result.variants[activeVariantIndex]) || result?.variants[0] || null;
   const selectedTemplate =
-    (result ? templates.find((template) => template.id === result.template.id) : null) ??
+    (activeVariant
+      ? templates.find((template) => template.id === activeVariant.template.id)
+      : null) ??
     templates.find((template) => template.id === templateId) ??
     null;
   const filteredTemplates = templates.filter((template) => {
@@ -170,6 +175,7 @@ export function MemeComposer() {
         }
 
         setResult(payload);
+        setActiveVariantIndex(0);
       } catch (nextError) {
         logError("client.meme-composer", "Meme generation request failed", {
           tone: nextTone,
@@ -193,7 +199,7 @@ export function MemeComposer() {
     }
   }
 
-  const lineCopy = result?.lines.filter(Boolean).join("\n") ?? "";
+  const lineCopy = activeVariant?.lines.filter(Boolean).join("\n") ?? "";
 
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
@@ -204,11 +210,11 @@ export function MemeComposer() {
               Meme Agent
             </p>
             <h2 className="text-2xl font-semibold tracking-[-0.04em]">
-              Generate a memegen reply
+              Generate meme options
             </h2>
             <p className="max-w-lg text-sm leading-7 text-white/68">
-              This agent chooses a template from a curated memegen set, writes
-              the caption, and returns a ready-to-preview meme URL.
+              This agent picks three different memegen templates, writes the
+              caption for each, and returns ready-to-preview meme URLs.
             </p>
           </div>
 
@@ -381,9 +387,8 @@ export function MemeComposer() {
                 Memegen-backed render
               </p>
               <p className="mt-2 text-sm leading-7 text-white/74">
-                The agent only writes the caption and chooses the template.
-                Rendering happens through memegen so you can evaluate real meme
-                formats instead of synthetic AI image art.
+                The agent now returns three different meme takes so you can
+                compare template fit and punchline quality before picking one.
               </p>
             </div>
 
@@ -392,7 +397,7 @@ export function MemeComposer() {
               disabled={isPending || content.trim().length < 12}
               className="inline-flex w-full items-center justify-center rounded-full bg-[#f6b26b] px-5 py-2.5 text-sm font-medium text-[#171717] transition hover:bg-[#ffc58f] disabled:cursor-not-allowed disabled:bg-[#c79d6b]"
             >
-              {isPending ? "Generating meme..." : "Generate meme"}
+              {isPending ? "Generating meme options..." : "Generate 3 meme options"}
             </button>
           </form>
         </div>
@@ -402,20 +407,53 @@ export function MemeComposer() {
         {result ? (
           <div className="rounded-[1.6rem] border border-panel-border bg-[#171717] p-3 text-white shadow-[0_24px_80px_rgba(23,23,23,0.14)] sm:p-4">
             <div className="rounded-[1.35rem] border border-white/10 bg-white/[0.04] p-4 sm:p-5">
+              {result.variants.length > 1 ? (
+                <div className="mb-4 grid gap-2 sm:grid-cols-3">
+                  {result.variants.map((variant, index) => {
+                    const isActive = variant === activeVariant;
+
+                    return (
+                      <button
+                        key={`${variant.template.id}-${index}`}
+                        type="button"
+                        onClick={() => setActiveVariantIndex(index)}
+                        className={`rounded-[1rem] border px-3.5 py-3 text-left transition ${
+                          isActive
+                            ? "border-[#ffb499] bg-[#ffb499]/12"
+                            : "border-white/10 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.05]"
+                        }`}
+                      >
+                        <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-[#ffb499]">
+                          Option {index + 1}
+                        </p>
+                        <p className="mt-2 text-sm font-semibold tracking-[-0.02em] text-white">
+                          {variant.template.name}
+                        </p>
+                        <p className="mt-1 text-xs leading-5 text-white/55">
+                          {variant.title}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+
+              {activeVariant ? (
+                <>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="font-mono text-xs uppercase tracking-[0.18em] text-[#ffb499]">
-                    Generated Meme
+                    {result.variants.length > 1 ? "Generated Memes" : "Generated Meme"}
                   </p>
                   <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.16em] text-white/42">
-                    {result.template.name} · {result.template.lineCount} line
-                    {result.template.lineCount > 1 ? "s" : ""} · {result.model} ·{" "}
+                    {activeVariant.template.name} · {activeVariant.template.lineCount} line
+                    {activeVariant.template.lineCount > 1 ? "s" : ""} · {result.model} ·{" "}
                     {result.reasoningEffort}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
                   <a
-                    href={result.imageUrl}
+                    href={activeVariant.imageUrl}
                     target="_blank"
                     rel="noreferrer"
                     className="inline-flex items-center justify-center rounded-full border border-white/12 bg-white/[0.04] px-3 py-1.5 text-xs text-white/75 transition hover:border-[#ffb499] hover:text-white"
@@ -423,8 +461,8 @@ export function MemeComposer() {
                     Open image
                   </a>
                   <a
-                    href={result.imageUrl}
-                    download={`${result.template.id}.jpg`}
+                    href={activeVariant.imageUrl}
+                    download={`${activeVariant.template.id}.jpg`}
                     className="inline-flex items-center justify-center rounded-full border border-white/12 bg-white/[0.04] px-3 py-1.5 text-xs text-white/75 transition hover:border-[#ffb499] hover:text-white"
                   >
                     Download
@@ -434,8 +472,8 @@ export function MemeComposer() {
 
               <div className="mt-4 overflow-hidden rounded-[1rem] border border-white/8 bg-white">
                 <Image
-                  src={result.imageUrl}
-                  alt={result.title}
+                  src={activeVariant.imageUrl}
+                  alt={activeVariant.title}
                   width={1200}
                   height={1200}
                   unoptimized
@@ -456,9 +494,9 @@ export function MemeComposer() {
                     />
                   </div>
                   <div className="mt-3 space-y-2">
-                    {result.lines.map((line, index) => (
+                    {activeVariant.lines.map((line, index) => (
                       <div
-                        key={`${result.template.id}-line-${index}`}
+                        key={`${activeVariant.template.id}-line-${index}`}
                         className="rounded-[0.85rem] border border-white/8 bg-black/20 px-3 py-2.5"
                       >
                         <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-white/44">
@@ -482,17 +520,17 @@ export function MemeComposer() {
                       label="Copy meme rationale"
                       onClick={() =>
                         handleCopy(
-                          `${result.template.name}\n\n${result.rationale}`,
+                          `${activeVariant.template.name}\n\n${activeVariant.rationale}`,
                           "meme-rationale",
                         )
                       }
                     />
                   </div>
                   <h3 className="mt-3 text-lg font-semibold tracking-[-0.03em] text-white">
-                    {result.title}
+                    {activeVariant.title}
                   </h3>
                   <p className="mt-2 text-sm leading-7 text-white/78">
-                    {result.rationale}
+                    {activeVariant.rationale}
                   </p>
                   {selectedTemplate ? (
                     <div className="mt-4 rounded-[0.95rem] border border-white/8 bg-black/20 px-3.5 py-3">
@@ -508,7 +546,7 @@ export function MemeComposer() {
                     </div>
                   ) : null}
                   <a
-                    href={result.blankUrl}
+                    href={activeVariant.blankUrl}
                     target="_blank"
                     rel="noreferrer"
                     className="mt-4 inline-flex items-center justify-center rounded-full border border-white/12 bg-white/[0.04] px-3 py-1.5 text-xs text-white/75 transition hover:border-[#ffb499] hover:text-white"
@@ -517,10 +555,12 @@ export function MemeComposer() {
                   </a>
                 </div>
               </div>
+                </>
+              ) : null}
             </div>
           </div>
         ) : (
-          <EmptyState copy="Your memegen preview will appear here with the chosen template, caption lines, and direct image link." />
+          <EmptyState copy="Your meme options will appear here with three template picks, caption lines, and direct image links." />
         )}
 
         <ErrorMessage error={error} />
