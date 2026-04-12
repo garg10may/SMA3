@@ -8,6 +8,14 @@ const nextConfig: NextConfig = {
       hmrRefreshes: true,
     },
   },
+  images: {
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "api.memegen.link",
+      },
+    ],
+  },
 };
 
 export default nextConfig;

@@ -55,6 +55,10 @@ import {
   type ShortDurationOption,
   type ShortTargetOption,
 } from "@/lib/short-config";
+import {
+  memeTemplateCatalog,
+  type MemeTemplateId,
+} from "@/lib/meme-agent";
 import { logError } from "@/lib/logger";
 
 type PostVariant = {
@@ -157,7 +161,26 @@ type XResponse = PostResult | ThreadResult;
 type GenerateResponse = XResponse | MediumResult;
 type ShortCreateResponse = ShortResult;
 type ShortStatusResponse = ShortJob;
-type ComposerTab = PlatformOption | "shorts";
+type MemeResult = {
+  format: "meme";
+  template: {
+    id: MemeTemplateId;
+    name: string;
+    lineCount: number;
+    helper: string;
+  };
+  title: string;
+  rationale: string;
+  lines: string[];
+  imageUrl: string;
+  blankUrl: string;
+  requestId?: string;
+};
+
+type MemeResponse = MemeResult;
+type ChannelWorkspace = PlatformOption | "shorts";
+type AgentWorkspace = "meme";
+type WorkspaceId = ChannelWorkspace | AgentWorkspace;
 type ErrorResponse = {
   error?: string;
   requestId?: string;
@@ -169,13 +192,22 @@ type CopyActionButtonProps = {
   onClick: () => void;
 };
 
-const composerTabs = [
+const channelWorkspaces = [
   ...platformOptions,
   {
     value: "shorts",
     label: "Shorts",
     helper:
       "Generate one AI-rendered vertical short plus the upload copy and prompt pack.",
+  },
+] as const;
+
+const agentWorkspaces = [
+  {
+    value: "meme",
+    label: "Meme Generator",
+    helper:
+      "Choose a memegen template, write the caption, and preview the result.",
   },
 ] as const;
 
@@ -260,6 +292,97 @@ function RefreshIcon() {
       <path d="M3 10.5v3h3" />
       <path d="M12.2 7A4.5 4.5 0 0 0 4.6 4.3L3 5.5" />
       <path d="M3.8 9A4.5 4.5 0 0 0 11.4 11.7L13 10.5" />
+    </svg>
+  );
+}
+
+function ChevronLeftIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 16 16"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.55"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="m10 3.5-4 4.5 4 4.5" />
+    </svg>
+  );
+}
+
+function WorkspaceIcon({ workspace }: { workspace: WorkspaceId }) {
+  if (workspace === "x") {
+    return (
+      <svg
+        aria-hidden="true"
+        viewBox="0 0 16 16"
+        className="h-4 w-4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M3 3.5 13 12.5" />
+        <path d="M13 3.5 3 12.5" />
+      </svg>
+    );
+  }
+
+  if (workspace === "medium") {
+    return (
+      <svg
+        aria-hidden="true"
+        viewBox="0 0 16 16"
+        className="h-4 w-4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.45"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M2.5 12.5V3.5h2.5l3 4.2 3-4.2h2.5v9" />
+        <path d="M8 7.7v4.8" />
+      </svg>
+    );
+  }
+
+  if (workspace === "shorts") {
+    return (
+      <svg
+        aria-hidden="true"
+        viewBox="0 0 16 16"
+        className="h-4 w-4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.45"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <rect x="3" y="2.5" width="10" height="11" rx="2" />
+        <path d="m7 5.5 3 2.5-3 2.5z" fill="currentColor" stroke="none" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 16 16"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.45"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="6" cy="6" r="2.25" />
+      <path d="M8.5 8.5 13 13" />
+      <path d="M11 4.25h2.5" />
+      <path d="M12.25 3v2.5" />
     </svg>
   );
 }
@@ -614,6 +737,70 @@ function ComposerPanel({
     >
       {children}
     </div>
+  );
+}
+
+function SidebarWorkspaceButton({
+  workspace,
+  label,
+  helper,
+  active,
+  collapsed,
+  onSelect,
+}: {
+  workspace: WorkspaceId;
+  label: string;
+  helper: string;
+  active: boolean;
+  collapsed: boolean;
+  onSelect: (workspace: WorkspaceId) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(workspace)}
+      title={collapsed ? label : undefined}
+      aria-label={collapsed ? label : undefined}
+      className={`w-full rounded-[1.1rem] border text-left transition ${
+        collapsed
+          ? "px-0 py-3"
+          : "px-3.5 py-3"
+      } ${
+        active
+          ? "border-[#171717] bg-[#171717] text-white shadow-[0_16px_36px_rgba(23,23,23,0.14)]"
+          : "border-panel-border bg-white/50 text-[#171717] hover:bg-white/80"
+      }`}
+    >
+      <div
+        className={`flex gap-3 ${
+          collapsed ? "items-center justify-center" : "items-start"
+        }`}
+      >
+        <span
+          className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border ${
+            active
+              ? "border-white/14 bg-white/[0.06] text-[#ffb499]"
+              : "border-panel-border bg-white/85 text-accent"
+          }`}
+        >
+          <WorkspaceIcon workspace={workspace} />
+        </span>
+        {collapsed ? null : (
+          <div className="min-w-0">
+            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-[#c7522a]">
+              {label}
+            </p>
+            <p
+              className={`mt-1 text-sm leading-6 ${
+                active ? "text-white/70" : "text-muted"
+              }`}
+            >
+              {helper}
+            </p>
+          </div>
+        )}
+      </div>
+    </button>
   );
 }
 
@@ -2175,52 +2362,437 @@ function ShortComposer() {
   );
 }
 
-export function PostGenerator() {
-  const [platform, setPlatform] = useState<ComposerTab>(DEFAULT_PLATFORM);
+function MemeComposer() {
+  const [content, setContent] = useState("");
+  const [direction, setDirection] = useState("");
+  const [tone, setTone] = useState<ToneOption>(DEFAULT_TONE);
+  const [templateId, setTemplateId] = useState<"" | MemeTemplateId>("");
+  const [result, setResult] = useState<MemeResult | null>(null);
+  const [error, setError] = useState("");
+  const [copyState, setCopyState] = useState("");
+  const [isPending, startTransition] = useTransition();
+
+  const contentRemaining = MAX_BRIEF_LENGTH - content.length;
+  const selectedTemplate =
+    result?.template ??
+    memeTemplateCatalog.find((template) => template.id === templateId) ??
+    null;
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const nextContent = content.trim();
+    const nextDirection = direction.trim();
+    const nextTone = tone;
+    const nextTemplateId = templateId;
+
+    startTransition(async () => {
+      setError("");
+      setCopyState("");
+
+      try {
+        const response = await fetch("/api/generate-meme", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            content: nextContent,
+            direction: nextDirection,
+            tone: nextTone,
+            templateId: nextTemplateId || undefined,
+          }),
+        });
+
+        const payload = await readResponsePayload<MemeResponse>(response);
+
+        if (!response.ok || !("format" in payload) || payload.format !== "meme") {
+          logError("client.meme-composer", "Meme generation failed", {
+            status: response.status,
+            tone: nextTone,
+            templateId: nextTemplateId || undefined,
+            requestId: "requestId" in payload ? payload.requestId : undefined,
+            payload,
+          });
+          setResult(null);
+          setError(readErrorMessage(payload, "The meme could not be generated. Try again."));
+          return;
+        }
+
+        setResult(payload);
+      } catch (nextError) {
+        logError("client.meme-composer", "Meme generation request failed", {
+          tone: nextTone,
+          templateId: nextTemplateId || undefined,
+          error: nextError,
+        });
+        setResult(null);
+        setError("The request failed. Check your connection and try again.");
+      }
+    });
+  }
+
+  async function handleCopy(text: string, key: string) {
+    try {
+      await writeClipboard(text);
+      setCopyState(key);
+      window.setTimeout(() => {
+        setCopyState((current) => (current === key ? "" : current));
+      }, 1600);
+    } catch {
+      setError("Copy failed. You can still select the text manually.");
+    }
+  }
+
+  const lineCopy = result?.lines.filter(Boolean).join("\n") ?? "";
 
   return (
-    <div className="space-y-4">
-      <section className="rounded-[1.35rem] border border-panel-border bg-panel/80 p-2 shadow-[0_20px_60px_rgba(23,23,23,0.08)]">
-        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-          {composerTabs.map((option) => {
-            const active = platform === option.value;
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+      <section className="rounded-[1.6rem] border border-panel-border bg-[#171717] p-3 text-white shadow-[0_24px_80px_rgba(23,23,23,0.18)] sm:p-4">
+        <div className="rounded-[1.35rem] border border-white/10 bg-white/[0.04] p-4 sm:p-5">
+          <div className="space-y-2">
+            <p className="font-mono text-xs uppercase tracking-[0.24em] text-[#ffb499]">
+              Meme Agent
+            </p>
+            <h2 className="text-2xl font-semibold tracking-[-0.04em]">
+              Generate a memegen reply
+            </h2>
+            <p className="max-w-lg text-sm leading-7 text-white/68">
+              This agent chooses a template from a curated memegen set, writes
+              the caption, and returns a ready-to-preview meme URL.
+            </p>
+          </div>
 
-            return (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => setPlatform(option.value)}
-                className={`rounded-[1.1rem] border px-4 py-3 text-left transition ${
-                  active
-                    ? "border-[#171717] bg-[#171717] text-white"
-                    : "border-panel-border bg-white/40 text-[#171717] hover:bg-white/70"
-                }`}
-              >
-                <p className="font-mono text-xs uppercase tracking-[0.18em] text-[#c7522a]">
-                  {option.label}
-                </p>
-                <p
-                  className={`mt-1 text-sm leading-6 ${
-                    active ? "text-white/70" : "text-muted"
-                  }`}
+          <form onSubmit={handleSubmit} className="mt-5 space-y-4">
+            <div className="space-y-2">
+              <FieldLabel htmlFor="meme-content">Tweet or reply context</FieldLabel>
+              <textarea
+                id="meme-content"
+                rows={8}
+                maxLength={MAX_BRIEF_LENGTH}
+                value={content}
+                onChange={(event) => setContent(event.target.value)}
+                placeholder="Example: Founder says they replaced strategy with ten dashboards and now wonders why nobody knows what matters."
+                className="w-full resize-none rounded-[1.15rem] border border-white/12 bg-white/[0.06] px-3.5 py-3.5 text-base leading-7 text-white outline-none transition focus:border-[#ffb499] focus:bg-white/[0.08]"
+                required
+              />
+              <div className="flex items-center justify-between text-xs text-white/45">
+                <span>Paste the post or explain the moment you want to react to.</span>
+                <span>{contentRemaining} left</span>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <FieldLabel htmlFor="meme-direction">Optional direction</FieldLabel>
+              <textarea
+                id="meme-direction"
+                rows={4}
+                value={direction}
+                onChange={(event) => setDirection(event.target.value)}
+                placeholder="Example: Make it mildly mocking, not hostile. Focus on operator chaos."
+                className="w-full resize-none rounded-[1.05rem] border border-white/12 bg-white/[0.06] px-3.5 py-3 text-sm leading-6 text-white outline-none transition focus:border-[#ffb499] focus:bg-white/[0.08]"
+              />
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <FieldLabel htmlFor="meme-tone">Tone</FieldLabel>
+                <select
+                  id="meme-tone"
+                  value={tone}
+                  onChange={(event) => setTone(event.target.value as ToneOption)}
+                  className="w-full rounded-[0.95rem] border border-white/12 bg-white/[0.06] px-3.5 py-2.5 text-sm text-white outline-none transition focus:border-[#ffb499]"
                 >
-                  {option.helper}
+                  {toneOptions.map((option) => (
+                    <option
+                      key={option.value}
+                      value={option.value}
+                      className="bg-[#171717]"
+                    >
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-2">
+                <FieldLabel htmlFor="meme-template">Template</FieldLabel>
+                <select
+                  id="meme-template"
+                  value={templateId}
+                  onChange={(event) =>
+                    setTemplateId(event.target.value as "" | MemeTemplateId)
+                  }
+                  className="w-full rounded-[0.95rem] border border-white/12 bg-white/[0.06] px-3.5 py-2.5 text-sm text-white outline-none transition focus:border-[#ffb499]"
+                >
+                  <option value="" className="bg-[#171717]">
+                    Auto choose
+                  </option>
+                  {memeTemplateCatalog.map((template) => (
+                    <option
+                      key={template.id}
+                      value={template.id}
+                      className="bg-[#171717]"
+                    >
+                      {template.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs leading-6 text-white/45">
+                  {templateId
+                    ? memeTemplateCatalog.find((template) => template.id === templateId)
+                        ?.helper
+                    : "Leave this on auto to let the agent choose from the curated set."}
                 </p>
-              </button>
-            );
-          })}
+              </div>
+            </div>
+
+            <div className="rounded-[1rem] border border-[#f6b26b]/20 bg-[#f6b26b]/8 px-4 py-3">
+              <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-[#ffd7ad]">
+                Memegen-backed render
+              </p>
+              <p className="mt-2 text-sm leading-7 text-white/74">
+                The agent only writes the caption and chooses the template.
+                Rendering happens through memegen so you can evaluate real meme
+                formats instead of synthetic AI image art.
+              </p>
+            </div>
+
+            <button
+              type="submit"
+              disabled={isPending || content.trim().length < 12}
+              className="inline-flex w-full items-center justify-center rounded-full bg-[#f6b26b] px-5 py-2.5 text-sm font-medium text-[#171717] transition hover:bg-[#ffc58f] disabled:cursor-not-allowed disabled:bg-[#c79d6b]"
+            >
+              {isPending ? "Generating meme..." : "Generate meme"}
+            </button>
+          </form>
         </div>
       </section>
 
-      <ComposerPanel active={platform === "x"}>
-        <XComposer />
-      </ComposerPanel>
-      <ComposerPanel active={platform === "medium"}>
-        <MediumComposer />
-      </ComposerPanel>
-      <ComposerPanel active={platform === "shorts"}>
-        <ShortComposer />
-      </ComposerPanel>
+      <section className="space-y-3">
+        {result ? (
+          <div className="rounded-[1.6rem] border border-panel-border bg-[#171717] p-3 text-white shadow-[0_24px_80px_rgba(23,23,23,0.14)] sm:p-4">
+            <div className="rounded-[1.35rem] border border-white/10 bg-white/[0.04] p-4 sm:p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="font-mono text-xs uppercase tracking-[0.18em] text-[#ffb499]">
+                    Generated Meme
+                  </p>
+                  <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.16em] text-white/42">
+                    {result.template.name} · {result.template.lineCount} line
+                    {result.template.lineCount > 1 ? "s" : ""}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <a
+                    href={result.imageUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center justify-center rounded-full border border-white/12 bg-white/[0.04] px-3 py-1.5 text-xs text-white/75 transition hover:border-[#ffb499] hover:text-white"
+                  >
+                    Open image
+                  </a>
+                  <a
+                    href={result.imageUrl}
+                    download={`${result.template.id}.png`}
+                    className="inline-flex items-center justify-center rounded-full border border-white/12 bg-white/[0.04] px-3 py-1.5 text-xs text-white/75 transition hover:border-[#ffb499] hover:text-white"
+                  >
+                    Download
+                  </a>
+                </div>
+              </div>
+
+              <div className="mt-4 overflow-hidden rounded-[1rem] border border-white/8 bg-white">
+                <Image
+                  src={result.imageUrl}
+                  alt={result.title}
+                  width={1200}
+                  height={1200}
+                  unoptimized
+                  className="w-full"
+                />
+              </div>
+
+              <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                <div className="rounded-[1rem] border border-white/8 bg-white/[0.03] p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-mono text-xs uppercase tracking-[0.16em] text-[#ffb499]">
+                      Caption lines
+                    </p>
+                    <CopyActionButton
+                      copied={copyState === "meme-lines"}
+                      label="Copy meme lines"
+                      onClick={() => handleCopy(lineCopy, "meme-lines")}
+                    />
+                  </div>
+                  <div className="mt-3 space-y-2">
+                    {result.lines.map((line, index) => (
+                      <div
+                        key={`${result.template.id}-line-${index}`}
+                        className="rounded-[0.85rem] border border-white/8 bg-black/20 px-3 py-2.5"
+                      >
+                        <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-white/44">
+                          Line {index + 1}
+                        </p>
+                        <p className="mt-1 text-sm leading-6 text-white/80">
+                          {line || "Blank"}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-[1rem] border border-white/8 bg-white/[0.03] p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-mono text-xs uppercase tracking-[0.16em] text-[#ffb499]">
+                      Agent choice
+                    </p>
+                    <CopyActionButton
+                      copied={copyState === "meme-rationale"}
+                      label="Copy meme rationale"
+                      onClick={() =>
+                        handleCopy(
+                          `${result.template.name}\n\n${result.rationale}`,
+                          "meme-rationale",
+                        )
+                      }
+                    />
+                  </div>
+                  <h3 className="mt-3 text-lg font-semibold tracking-[-0.03em] text-white">
+                    {result.title}
+                  </h3>
+                  <p className="mt-2 text-sm leading-7 text-white/78">
+                    {result.rationale}
+                  </p>
+                  {selectedTemplate ? (
+                    <div className="mt-4 rounded-[0.95rem] border border-white/8 bg-black/20 px-3.5 py-3">
+                      <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-white/44">
+                        Template fit
+                      </p>
+                      <p className="mt-1 text-sm leading-6 text-white/72">
+                        {selectedTemplate.helper}
+                      </p>
+                    </div>
+                  ) : null}
+                  <a
+                    href={result.blankUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-4 inline-flex items-center justify-center rounded-full border border-white/12 bg-white/[0.04] px-3 py-1.5 text-xs text-white/75 transition hover:border-[#ffb499] hover:text-white"
+                  >
+                    View blank template
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <EmptyState copy="Your memegen preview will appear here with the chosen template, caption lines, and direct image link." />
+        )}
+
+        <ErrorMessage error={error} />
+      </section>
+    </div>
+  );
+}
+
+export function PostGenerator() {
+  const [workspace, setWorkspace] = useState<WorkspaceId>(DEFAULT_PLATFORM);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  return (
+    <div className="grid gap-4 xl:grid-cols-[auto_minmax(0,1fr)]">
+      <aside className="xl:sticky xl:top-6 xl:self-start">
+        <section
+          className={`rounded-[1.35rem] border border-panel-border bg-panel/80 p-3 shadow-[0_20px_60px_rgba(23,23,23,0.08)] transition-all ${
+            sidebarCollapsed ? "xl:w-[5.75rem]" : "xl:w-[18.5rem]"
+          }`}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className={sidebarCollapsed ? "xl:hidden" : ""}>
+              <p className="font-mono text-xs uppercase tracking-[0.18em] text-[#c7522a]">
+                Workspace
+              </p>
+              <h2 className="mt-2 text-lg font-semibold tracking-[-0.03em] text-[#171717]">
+                Channels and agents
+              </h2>
+              <p className="mt-1 max-w-[14rem] text-sm leading-6 text-muted">
+                Switch between publishing channels and internal generators from
+                one rail.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed((current) => !current)}
+              aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              aria-expanded={!sidebarCollapsed}
+              className="hidden h-10 w-10 items-center justify-center rounded-full border border-panel-border bg-white/70 text-[#171717] transition hover:bg-white xl:inline-flex"
+            >
+              <span
+                className={sidebarCollapsed ? "rotate-180 transition" : "transition"}
+              >
+                <ChevronLeftIcon />
+              </span>
+            </button>
+          </div>
+
+          <div className="mt-5 space-y-5">
+            <div className="space-y-2.5">
+              {sidebarCollapsed ? null : (
+                <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">
+                  Channels
+                </p>
+              )}
+              {channelWorkspaces.map((option) => (
+                <SidebarWorkspaceButton
+                  key={option.value}
+                  workspace={option.value}
+                  label={option.label}
+                  helper={option.helper}
+                  active={workspace === option.value}
+                  collapsed={sidebarCollapsed}
+                  onSelect={setWorkspace}
+                />
+              ))}
+            </div>
+
+            <div className="space-y-2.5">
+              {sidebarCollapsed ? null : (
+                <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">
+                  Agents
+                </p>
+              )}
+              {agentWorkspaces.map((option) => (
+                <SidebarWorkspaceButton
+                  key={option.value}
+                  workspace={option.value}
+                  label={option.label}
+                  helper={option.helper}
+                  active={workspace === option.value}
+                  collapsed={sidebarCollapsed}
+                  onSelect={setWorkspace}
+                />
+              ))}
+            </div>
+          </div>
+        </section>
+      </aside>
+
+      <div className="min-w-0 space-y-4">
+        <ComposerPanel active={workspace === "x"}>
+          <XComposer />
+        </ComposerPanel>
+        <ComposerPanel active={workspace === "medium"}>
+          <MediumComposer />
+        </ComposerPanel>
+        <ComposerPanel active={workspace === "shorts"}>
+          <ShortComposer />
+        </ComposerPanel>
+        <ComposerPanel active={workspace === "meme"}>
+          <MemeComposer />
+        </ComposerPanel>
+      </div>
     </div>
   );
 }
