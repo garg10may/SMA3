@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const COPY_FEEDBACK_DURATION_MS = 1600;
 
@@ -16,23 +16,23 @@ export function useCopyFeedback() {
     };
   }, []);
 
-  function resetCopyState() {
+  const resetCopyState = useCallback(() => {
     if (timeoutRef.current !== null) {
       window.clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
     }
 
     setCopyState("");
-  }
+  }, []);
 
-  function markCopied(key: string) {
+  const markCopied = useCallback((key: string) => {
     resetCopyState();
     setCopyState(key);
     timeoutRef.current = window.setTimeout(() => {
       setCopyState((current) => (current === key ? "" : current));
       timeoutRef.current = null;
     }, COPY_FEEDBACK_DURATION_MS);
-  }
+  }, [resetCopyState]);
 
   return {
     copyState,
